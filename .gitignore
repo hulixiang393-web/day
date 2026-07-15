@@ -1,0 +1,81 @@
+# === 编译文件 / 构建产物 ===
+*.class
+*.o
+*.so
+*.dll
+*.dylib
+*.exe
+*.obj
+*.a
+*.lib
+*.pyc
+*.pyo
+__pycache__/
+*.pyd
+*.wasm
+*.tsbuildinfo
+
+# === 依赖目录 ===
+node_modules/
+vendor/
+bower_components/
+packages/
+.venv/
+venv/
+env/
+.env/
+*.egg-info/
+dist/
+build/
+target/
+out/
+
+# === 下载文件 ===
+downloads/
+*.tar.gz
+*.zip
+*.rar
+*.7z
+
+# === IDE / 编辑器 ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# === 系统文件 ===
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# === 日志 / 临时文件 ===
+*.log
+*.tmp
+*.temp
+*.cache
+.cache/
+
+# === 环境 / 密钥 ===
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+credentials/
+
+# === 测试覆盖报告 ===
+coverage/
+.coverage
+htmlcov/
+.nyc_output/
+
+# === 操作系统 ===
+*.bak
