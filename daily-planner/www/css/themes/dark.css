@@ -1,0 +1,54 @@
+/* 暗夜星穹二次元 — 深色主题 */
+
+[data-theme="dark"] {
+  --color-primary: #FF8EC4;
+  --color-primary-light: #FFB8D9;
+  --color-primary-dark: #FF6099;
+  --color-secondary: #6EB8FF;
+  --color-secondary-light: #9ED0FF;
+  --color-accent: #FFC266;
+  --color-accent-light: #FFD68A;
+
+  --priority-urgent: #FF7070;
+  --priority-urgent-bg: rgba(255, 107, 107, 0.15);
+  --priority-high: #FFB547;
+  --priority-high-bg: rgba(255, 165, 2, 0.15);
+  --priority-normal: #5EA8FF;
+  --priority-normal-bg: rgba(84, 160, 255, 0.15);
+  --priority-low: #6FD67E;
+  --priority-low-bg: rgba(95, 204, 110, 0.15);
+
+  --color-success: #6FD67E;
+  --color-warning: #FFC266;
+  --color-danger: #FF7070;
+  --color-overdue: #FF5252;
+  --color-info: #5EA8FF;
+
+  --bg-primary: #1A1A2E;
+  --bg-secondary: #16162A;
+  --bg-card: #202040;
+  --bg-sidebar: #14142A;
+  --bg-header: rgba(20, 20, 42, 0.88);
+  --bg-mobile-nav: rgba(20, 20, 42, 0.95);
+  --bg-modal-overlay: rgba(0, 0, 0, 0.6);
+  --bg-input: #252550;
+  --bg-hover: rgba(255, 142, 196, 0.1);
+  --bg-active: rgba(255, 142, 196, 0.18);
+
+  --text-primary: #E8E6F0;
+  --text-secondary: #A09EB5;
+  --text-muted: #6C6A85;
+  --text-on-primary: #FFFFFF;
+  --text-link: #FF8EC4;
+
+  --border-color: #2D2B50;
+  --border-color-light: #252545;
+  --border-color-strong: #3D3B65;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 24px rgba(255, 142, 196, 0.25);
+}

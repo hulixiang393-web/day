@@ -1,0 +1,194 @@
+/* 任务卡片组件样式 */
+
+.task-card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  position: relative;
+  min-height: var(--task-card-min-height);
+}
+
+.task-card:hover {
+  box-shadow: var(--shadow-sm);
+  border-color: var(--color-primary-light);
+}
+
+.task-card:active { transform: scale(0.99); }
+
+/* 优先级左边框 */
+.task-card--urgent { border-left: 4px solid var(--priority-urgent); }
+.task-card--high { border-left: 4px solid var(--priority-high); }
+.task-card--normal { border-left: 4px solid var(--priority-normal); }
+.task-card--low { border-left: 4px solid var(--priority-low); }
+
+/* 任务状态 */
+.task-card--completed { opacity: 0.65; }
+.task-card--completed .task-card__title { text-decoration: line-through; }
+.task-card--overdue { border-color: var(--color-overdue); background: rgba(255, 71, 87, 0.03); }
+
+/* 复选框 */
+.task-card__checkbox {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  position: relative;
+}
+
+.task-card__checkbox:hover { border-color: var(--color-success); }
+.task-card__checkbox.checked {
+  background: var(--color-success);
+  border-color: var(--color-success);
+  color: #fff;
+}
+
+.task-card__checkbox.checked::after {
+  content: '✓';
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* 任务主体 */
+.task-card__body { flex: 1; min-width: 0; }
+.task-card__title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.task-card__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  margin-top: var(--space-1);
+}
+
+.task-card__meta-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 标签 */
+.task-card__tags {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: var(--space-1);
+}
+
+.task-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+/* 优先级徽章 */
+.priority-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.priority-badge--urgent { background: var(--priority-urgent-bg); color: var(--priority-urgent); }
+.priority-badge--high { background: var(--priority-high-bg); color: var(--priority-high); }
+.priority-badge--normal { background: var(--priority-normal-bg); color: var(--priority-normal); }
+.priority-badge--low { background: var(--priority-low-bg); color: var(--priority-low); }
+
+/* 任务操作按钮 */
+.task-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.task-card:hover .task-card__actions { opacity: 1; }
+
+/* 任务列表 */
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.task-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+}
+
+.task-list-count {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+/* 快捷新建条 */
+.quick-add-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background: var(--bg-card);
+  border: 2px dashed var(--border-color-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  min-height: 48px;
+}
+
+.quick-add-bar:hover {
+  border-color: var(--color-primary);
+  background: var(--bg-hover);
+}
+
+.quick-add-bar__icon {
+  font-size: 1.3em;
+  color: var(--color-primary);
+  flex-shrink: 0;
+}
+
+.quick-add-bar__placeholder {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.quick-add-bar__shortcut {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  background: var(--bg-input);
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+}

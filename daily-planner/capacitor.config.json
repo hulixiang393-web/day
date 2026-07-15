@@ -1,0 +1,21 @@
+{
+  "appId": "com.anime.planner",
+  "appName": "二次元计划表",
+  "webDir": "www",
+  "include": [
+    "index.html",
+    "manifest.json",
+    "sw.js",
+    "css/**/*",
+    "js/**/*",
+    "assets/**/*"
+  ],
+  "server": {
+    "url": "http://localhost:3000",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true
+  }
+}
