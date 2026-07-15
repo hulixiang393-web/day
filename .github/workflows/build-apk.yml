@@ -25,11 +25,6 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: 设置 Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: 'platforms;android-36 build-tools;36.0.0'
-
       - name: 准备 www 目录
         run: |
           mkdir -p www
@@ -45,6 +40,26 @@ jobs:
 
       - name: 同步 Capacitor
         run: npx cap sync android
+
+      - name: 设置 Android SDK
+        run: |
+          # Download commandline tools
+          mkdir -p $HOME/android-sdk/cmdline-tools
+          cd $HOME/android-sdk/cmdline-tools
+          curl -L -o tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q tools.zip
+          mv cmdline-tools latest
+          rm tools.zip
+
+          # Set environment
+          export ANDROID_HOME=$HOME/android-sdk
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+
+          # Accept licenses and install SDK
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
 
       - name: 构建 APK
         working-directory: daily-planner/android
