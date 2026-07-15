@@ -1,0 +1,35 @@
+{
+  "name": "二次元计划表",
+  "short_name": "计划表",
+  "description": "二次元风格跨端计划表 - 日程管理、习惯打卡、番茄钟专注",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#FFF5F9",
+  "theme_color": "#FF7EB3",
+  "orientation": "any",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌸</text></svg>",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "utilities"],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "新建任务",
+      "short_name": "新建",
+      "description": "快速创建新任务",
+      "url": "./index.html#/list?action=add"
+    },
+    {
+      "name": "番茄钟",
+      "short_name": "专注",
+      "description": "打开番茄钟",
+      "url": "./index.html#/pomodoro"
+    }
+  ]
+}
