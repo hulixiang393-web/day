@@ -1657,9 +1657,15 @@ const App = {
       const tasks = taskDefs.map((def,ti)=>{
         const match = def.match(/^(.+?)\s+(\d+)$/);
         if(!match) { errors.push(`第${i+1}行任务${ti+1}：「${def}」格式错误，应为"任务名 分钟数"`); return null; }
+        // 根据任务名自动识别时间段
+        var title = match[1].trim();
+        var sh = '09:00';
+        if(title.indexOf('上午')===0) sh = '09:00';
+        else if(title.indexOf('下午')===0) sh = '14:00';
+        else if(title.indexOf('晚上')===0) sh = '20:00';
         return {
-          id:UUID(), planId, title:match[1].trim(), duration:parseInt(match[2]),
-          startHour:'09:00', priority:'medium', tags:[], status:'pending', reminders:[],
+          id:UUID(), planId, title:title, duration:parseInt(match[2]),
+          startHour:sh, priority:'medium', tags:[], status:'pending', reminders:[],
           order:ti, createdAt:now(), completedAt:null,
         };
       }).filter(Boolean);
