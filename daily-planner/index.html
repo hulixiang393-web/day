@@ -3112,6 +3112,34 @@ const CloudSync = {
     return JSON.stringify(data);
   },
 
+  // 使用 XHR 上传（兼容移动端 CORS）
+  _xhrUpload(repo, token, body, syncPw) {
+    var self = this;
+    return new Promise(function(resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('PUT', 'https://api.github.com/repos/'+repo+'/contents/backup/sync.apbak', true);
+      xhr.setRequestHeader('Authorization', 'token '+token);
+      xhr.setRequestHeader('Accept', 'application/vnd.github+json');
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.onload = function() {
+        if(xhr.status >= 200 && xhr.status < 300) {
+          self.setLastSync();
+          var stEl = document.getElementById('sync-status');
+          if(stEl) stEl.textContent = '上次同步: '+formatDate(today());
+          App.toast('同步上传成功！☁','success');
+          resolve(true);
+        } else {
+          try { var err = JSON.parse(xhr.responseText); reject(new Error(err.message||'HTTP '+xhr.status)); }
+          catch(e) { reject(new Error('HTTP '+xhr.status)); }
+        }
+      };
+      xhr.onerror = function() { reject(new Error('网络请求失败，请检查网络连接')); };
+      xhr.ontimeout = function() { reject(new Error('上传超时')); };
+      xhr.timeout = 30000;
+      xhr.send(JSON.stringify(body));
+    });
+  },
+
   async upload() {
     var token = document.getElementById('sync-token') ? document.getElementById('sync-token').value : this.getToken();
     var repo = document.getElementById('sync-repo') ? document.getElementById('sync-repo').value : this.getRepo();
@@ -3122,7 +3150,6 @@ const CloudSync = {
 
     this.saveConfig({token: token, repo: repo, syncPassword: syncPw});
 
-    // 检查加密API可用性
     if(!window.crypto || !window.crypto.subtle) {
       App.toast('加密API不可用，请使用HTTPS访问','error'); return;
     }
@@ -3132,70 +3159,68 @@ const CloudSync = {
       var json = this.packData();
       var encrypted = await aesEncrypt(json, syncPw);
 
+      // 获取现有文件SHA
       var sha = null;
       try {
         var getResp = await fetch('https://api.github.com/repos/'+repo+'/contents/backup/sync.apbak', {
           headers: { 'Authorization': 'token '+token, 'Accept': 'application/vnd.github+json' }
         });
         if(getResp.ok) { var fi = await getResp.json(); sha = fi.sha; }
-      } catch(e) { console.log('get sha failed:', e); }
+      } catch(e) {}
 
-      var body = {
-        message: 'sync: '+today(),
-        content: encrypted,
-        branch: 'main'
-      };
+      var body = { message: 'sync: '+today(), content: encrypted, branch: 'main' };
       if(sha) body.sha = sha;
 
-      var resp = await fetch('https://api.github.com/repos/'+repo+'/contents/backup/sync.apbak', {
-        method: 'PUT',
-        headers: { 'Authorization': 'token '+token, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-
-      if(resp.ok) {
-        this.setLastSync();
-        var stEl = document.getElementById('sync-status');
-        if(stEl) stEl.textContent = '上次同步: '+formatDate(today());
-        App.toast('同步上传成功！☁','success');
-      } else {
-        var err = await resp.json().catch(function(){return {message:'HTTP '+resp.status};});
-        App.toast('上传失败: '+(err.message||resp.status),'error');
-      }
+      // 先尝试 XHR（移动端兼容）
+      await this._xhrUpload(repo, token, body, syncPw);
     } catch(e) {
-      App.toast('上传异常: '+e.message,'error');
-      console.error('CloudSync upload error:', e);
+      // XHR 失败，尝试 fetch 回退
+      try {
+        var resp2 = await fetch('https://api.github.com/repos/'+repo+'/contents/backup/sync.apbak', {
+          method: 'PUT',
+          headers: { 'Authorization': 'token '+token, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if(resp2.ok) {
+          this.setLastSync();
+          var stEl2 = document.getElementById('sync-status');
+          if(stEl2) stEl2.textContent = '上次同步: '+formatDate(today());
+          App.toast('同步上传成功！☁','success');
+        } else {
+          var err2 = await resp2.json().catch(function(){return {message:'HTTP '+resp2.status};});
+          App.toast('上传失败: '+(err2.message||resp2.status),'error');
+        }
+      } catch(e2) {
+        App.toast('上传失败: '+e2.message,'error');
+        console.error('CloudSync upload error:', e2);
+      }
     }
   },
 
   async download() {
-    var token = document.getElementById('sync-token') ? document.getElementById('sync-token').value : this.getToken();
     var repo = document.getElementById('sync-repo') ? document.getElementById('sync-repo').value : this.getRepo();
     var syncPwEl = document.getElementById('sync-password');
     var syncPw = syncPwEl ? syncPwEl.value : this.getSyncPassword();
-    if(!token) { App.toast('请先设置 GitHub Token','error'); return; }
     if(!syncPw || syncPw.length < 6) { App.toast('请先设置同步密码（至少6位，两端必须一致）','error'); return; }
-
-    this.saveConfig({token: token, repo: repo, syncPassword: syncPw});
-
+    this.saveConfig({repo: repo, syncPassword: syncPw});
     if(!window.crypto || !window.crypto.subtle) {
       App.toast('加密API不可用，请使用HTTPS访问','error'); return;
     }
 
     App.toast('正在从云端下载...','info');
     try {
-      var resp = await fetch('https://api.github.com/repos/'+repo+'/contents/backup/sync.apbak', {
-        headers: { 'Authorization': 'token '+token, 'Accept': 'application/vnd.github+json' }
-      });
+      // 使用 raw.githubusercontent.com 免认证下载（公开仓库）
+      var resp = await fetch('https://raw.githubusercontent.com/'+repo+'/main/backup/sync.apbak', {cache:'no-cache'});
 
       if(!resp.ok) {
         if(resp.status === 404) { App.toast('云端暂无备份，请先在另一设备上传','info'); }
-        else { var err2 = await resp.json().catch(function(){return {message:'HTTP '+resp.status};}); App.toast('下载失败: '+(err2.message||resp.status),'error'); }
+        else { App.toast('下载失败: HTTP '+resp.status,'error'); }
         return;
       }
 
-      var info = await resp.json();
-      var encrypted = info.content.replace(/\n/g, '');
+      // raw 返回的是文件原始内容（base64编码的加密数据）
+      var encrypted = await resp.text();
+      encrypted = encrypted.replace(/\n/g, '').replace(/\r/g, '');
 
       var decrypted = await aesDecrypt(encrypted, syncPw);
       if(!decrypted) {
