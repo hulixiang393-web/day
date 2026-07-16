@@ -9,6 +9,7 @@ import { showToast } from './core/toast.js';
 import { openModal } from './core/modal.js';
 import { initKeyboard, registerShortcut } from './utils/keyboard.js';
 import { initMascot } from './components/mascot.js';
+import { hasPassword, verifyPassword, setPassword } from './core/auth.js';
 import { TaskModel } from './data/models/task.js';
 import { TaskForm } from './components/taskForm.js';
 import { ListView } from './views/listView.js';
@@ -93,8 +94,105 @@ function updateSidebarActive(viewName) {
   });
 }
 
+/** 密码锁 */
+async function checkAuth() {
+  const hasPwd = hasPassword();
+
+  if (!hasPwd) {
+    // 首次使用：设置密码
+    document.getElementById('auth-title').textContent = '🔐 设置密码';
+    document.getElementById('auth-desc').textContent = '首次使用，请设置一个密码（不存服务器，只在本地验证）';
+    document.getElementById('auth-submit').textContent = '🔒 设置密码';
+    document.getElementById('auth-reset').style.display = 'none';
+
+    return new Promise((resolve) => {
+      const overlay = document.getElementById('auth-overlay');
+      const input = document.getElementById('auth-password');
+      const btn = document.getElementById('auth-submit');
+      const error = document.getElementById('auth-error');
+      input.value = '';
+
+      const handler = async () => {
+        const pwd = input.value.trim();
+        if (pwd.length < 4) {
+          error.textContent = '密码至少4个字符';
+          error.style.display = 'block';
+          return;
+        }
+        await setPassword(pwd);
+        overlay.classList.add('hidden');
+        resolve(true);
+      };
+
+      btn.replaceWith(btn.cloneNode(true));
+      const newBtn = document.getElementById('auth-submit');
+      newBtn.addEventListener('click', handler);
+      input.replaceWith(input.cloneNode(true));
+      const newInput = document.getElementById('auth-password');
+      newInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') handler(); });
+      newInput.focus();
+    });
+  }
+
+  // 已有密码：验证
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('auth-overlay');
+    const input = document.getElementById('auth-password');
+    const btn = document.getElementById('auth-submit');
+    const error = document.getElementById('auth-error');
+    const resetBtn = document.getElementById('auth-reset');
+
+    document.getElementById('auth-title').textContent = '🔒 二次元计划表';
+    document.getElementById('auth-desc').textContent = '输入密码解锁';
+    document.getElementById('auth-submit').textContent = '🔓 解锁';
+    resetBtn.style.display = 'block';
+    input.value = '';
+
+    const handler = async () => {
+      const pwd = input.value.trim();
+      const ok = await verifyPassword(pwd);
+      if (ok) {
+        overlay.classList.add('hidden');
+        resolve(true);
+      } else {
+        error.style.display = 'block';
+        input.value = '';
+        input.focus();
+      }
+    };
+
+    const resetHandler = () => {
+      if (confirm('确定要重置密码吗？\n\n⚠️ 所有已加密的私密任务将无法恢复。\n普通任务数据不受影响。')) {
+        const newPwd = prompt('请输入新密码（至少4个字符）：');
+        if (newPwd && newPwd.trim().length >= 4) {
+          setPassword(newPwd.trim()).then(() => {
+            overlay.classList.add('hidden');
+            resolve(true);
+          });
+        }
+      }
+    };
+
+    btn.replaceWith(btn.cloneNode(true));
+    const newBtn = document.getElementById('auth-submit');
+    newBtn.addEventListener('click', handler);
+
+    input.replaceWith(input.cloneNode(true));
+    const newInput = document.getElementById('auth-password');
+    newInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') handler(); });
+    newInput.focus();
+
+    resetBtn.replaceWith(resetBtn.cloneNode(true));
+    document.getElementById('auth-reset').addEventListener('click', resetHandler);
+  });
+}
+
 /** 初始化应用 */
 async function init() {
+  // 0. 密码验证 (在最前面)
+  const authed = await checkAuth();
+  if (!authed) return;
+
   try {
     // 1. 打开数据库
     await db.open();

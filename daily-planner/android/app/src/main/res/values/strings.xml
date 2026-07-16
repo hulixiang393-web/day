@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">二次元计划表</string>
-    <string name="title_activity_main">二次元计划表</string>
-    <string name="package_name">com.anime.planner</string>
-    <string name="custom_url_scheme">com.anime.planner</string>
-</resources>
