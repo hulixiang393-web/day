@@ -49,20 +49,14 @@
 
 <!-- 密码锁 -->
 <div id="auth-overlay" class="auth-overlay">
-  <div class="auth-card animate-pop-in">
+  <div class="auth-card animate-pop-in" style="max-width:400px">
     <div class="auth-icon">🌸</div>
     <h2 id="auth-title">二次元计划表</h2>
-    <p id="auth-desc" class="text-secondary text-sm">欢迎回来</p>
-    <div class="auth-input-wrap">
-      <input type="password" id="auth-password" class="auth-input" placeholder="输入密码..." maxlength="32" autocomplete="off">
-      <button id="auth-submit" class="btn btn-primary btn-full mt-2">🔓 进入</button>
-      <div id="auth-attempts" class="text-xs text-muted mt-2"></div>
-    </div>
+    <p id="auth-desc" class="text-secondary text-sm"></p>
+    <div id="auth-form" class="auth-input-wrap"></div>
     <p id="auth-error" class="text-sm text-priority-urgent mt-2" style="display:none"></p>
-    <div id="auth-reset-area" class="mt-3" style="display:none">
-      <div class="text-xs text-muted mb-2">忘记密码？点击下方重置（数据不会丢失）</div>
-      <button id="auth-reset" class="btn btn-sm btn-danger">🔄 重置密码</button>
-    </div>
+    <div id="auth-attempts" class="text-xs text-muted mt-2"></div>
+    <div id="auth-bottom" class="mt-3"></div>
   </div>
 </div>
 
