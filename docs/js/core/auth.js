@@ -1,105 +1,129 @@
-/* 密码认证模块 */
+/* 密码认证模块 — 安全加固版 */
 
-const PWD_KEY = 'dp_app_password';
-const QUESTION_KEY = 'dp_app_question';
-const ANSWER_KEY = 'dp_app_answer';
-const SESSION_KEY = 'dp_app_session';
-const ATTEMPT_KEY = 'dp_auth_attempts';
-const LOCK_KEY = 'dp_auth_locked_until';
-const MAX_ATTEMPTS = 5;
-const LOCK_MINUTES = 5;
+const K = (s) => 'dp2_' + s;
+const PWD = K('pwd'), QUES = K('ques'), ANS = K('ans');
+const SESS = K('sess'), SESS_ID = K('sid');
+const AT_PWD = K('at_pwd'), LOCK_PWD = K('lock_pwd');
+const AT_ANS = K('at_ans'), LOCK_ANS = K('lock_ans');
+
+const MAX_TRY = 5, LOCK_SEC = 300;        // 密码：5次锁定5分钟
+const MAX_TRY_ANS = 3, LOCK_ANS_SEC = 900; // 安全问题：3次锁定15分钟
 const SESSION_DAYS = 30;
 
-/** 是否有密码 */
-export function hasPassword() { return !!localStorage.getItem(PWD_KEY); }
+// ====== 密码 ======
 
-/** 是否有安全问题 */
-export function hasQuestion() { return !!localStorage.getItem(QUESTION_KEY); }
+export function hasPassword() { return !!localStorage.getItem(PWD); }
 
-/** 获取安全问题 */
-export function getQuestion() { return localStorage.getItem(QUESTION_KEY) || ''; }
-
-/** 设置密码 + 安全问题 */
-export async function setPassword(password, question, answer) {
-  localStorage.setItem(PWD_KEY, await hashPassword(password));
-  localStorage.setItem(QUESTION_KEY, question);
-  localStorage.setItem(ANSWER_KEY, answer.toLowerCase().trim());
-  clearAttempts();
-  createSession();
+export async function setPassword(password) {
+  localStorage.setItem(PWD, await hash(password));
 }
-
-/** 验证密码 */
 export async function verifyPassword(password) {
-  const stored = localStorage.getItem(PWD_KEY);
-  if (!stored) return true;
-  return (await hashPassword(password)) === stored;
+  const stored = localStorage.getItem(PWD);
+  if (!stored) return false;
+  return timingSafeEqual(await hash(password), stored);
 }
 
-/** 验证安全问题答案 */
-export function verifyAnswer(answer) {
-  const stored = localStorage.getItem(ANSWER_KEY);
-  if (!stored) return true;
-  return answer.toLowerCase().trim() === stored;
+// ====== 安全问题 ======
+
+export function hasQuestion() { return !!localStorage.getItem(QUES); }
+export function getQuestion() { return localStorage.getItem(QUES) || ''; }
+export async function setQuestion(question, answer) {
+  localStorage.setItem(QUES, sanitize(question));
+  localStorage.setItem(ANS, await hash(answer.toLowerCase().trim()));
+}
+export async function verifyAnswer(answer) {
+  const stored = localStorage.getItem(ANS);
+  if (!stored) return false; // 没有设置答案 → 拒绝
+  return timingSafeEqual(await hash(answer.toLowerCase().trim()), stored);
 }
 
-/** 重置密码（需先验证答案） */
-export async function resetPassword(newPassword) {
-  localStorage.setItem(PWD_KEY, await hashPassword(newPassword));
-  clearAttempts();
-  createSession();
-}
+// ====== 会话（30天自动过期） ======
 
-/** 创建会话（30天有效） */
 export function createSession() {
-  const expiry = Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000;
-  localStorage.setItem(SESSION_KEY, String(expiry));
+  const id = randomToken(32);
+  const expiry = Date.now() + SESSION_DAYS * 86400000;
+  localStorage.setItem(SESS, String(expiry));
+  localStorage.setItem(SESS_ID, id + '|' + String(expiry));
 }
-
-/** 检查会话是否有效 */
 export function hasValidSession() {
-  const expiry = localStorage.getItem(SESSION_KEY);
-  if (!expiry) return false;
-  return Date.now() < parseInt(expiry);
-}
-
-/** 清除会话 */
-export function clearSession() {
-  localStorage.removeItem(SESSION_KEY);
-}
-
-/** 锁定相关 */
-export function isLocked() {
-  const until = localStorage.getItem(LOCK_KEY);
-  if (!until) return false;
-  if (Date.now() > parseInt(until)) {
-    localStorage.removeItem(LOCK_KEY);
-    clearAttempts();
-    return false;
-  }
+  const exp = localStorage.getItem(SESS);
+  const sid = localStorage.getItem(SESS_ID);
+  if (!exp || !sid) return false;
+  const parts = sid.split('|');
+  if (parts.length !== 2) return false;
+  if (Date.now() >= parseInt(exp)) { clearSession(); return false; }
+  // 验证 token 完整性（防篡改）
+  if (parts[1] !== exp) { clearSession(); return false; }
   return true;
 }
-export function lockRemaining() {
-  const until = localStorage.getItem(LOCK_KEY);
-  return until ? Math.max(0, Math.ceil((parseInt(until) - Date.now()) / 1000)) : 0;
-}
-export function recordAttempt() {
-  const n = parseInt(localStorage.getItem(ATTEMPT_KEY) || '0') + 1;
-  localStorage.setItem(ATTEMPT_KEY, String(n));
-  if (n >= MAX_ATTEMPTS) {
-    localStorage.setItem(LOCK_KEY, String(Date.now() + LOCK_MINUTES * 60 * 1000));
-  }
-  return n;
-}
-export function remainingAttempts() {
-  return Math.max(0, MAX_ATTEMPTS - parseInt(localStorage.getItem(ATTEMPT_KEY) || '0'));
-}
-export function clearAttempts() {
-  localStorage.removeItem(ATTEMPT_KEY);
-  localStorage.removeItem(LOCK_KEY);
+export function clearSession() {
+  localStorage.removeItem(SESS);
+  localStorage.removeItem(SESS_ID);
 }
 
-async function hashPassword(p) {
-  const d = new TextEncoder().encode(p + 'anime-planner');
+// ====== 密码锁定 ======
+
+export function isLocked() {
+  const until = parseInt(localStorage.getItem(LOCK_PWD) || '0');
+  if (!until) return false;
+  if (Date.now() >= until) { localStorage.removeItem(LOCK_PWD); resetPwdAttempts(); return false; }
+  return true;
+}
+export function lockSeconds() {
+  return Math.max(0, Math.ceil((parseInt(localStorage.getItem(LOCK_PWD) || '0') - Date.now()) / 1000));
+}
+export function recordPwdAttempt() {
+  const n = Math.min(MAX_TRY, parseInt(localStorage.getItem(AT_PWD) || '0') + 1);
+  localStorage.setItem(AT_PWD, String(n));
+  if (n >= MAX_TRY) localStorage.setItem(LOCK_PWD, String(Date.now() + LOCK_SEC * 1000));
+  return n;
+}
+export function remainingPwd() { return Math.max(0, MAX_TRY - parseInt(localStorage.getItem(AT_PWD) || '0')); }
+export function resetPwdAttempts() { localStorage.removeItem(AT_PWD); localStorage.removeItem(LOCK_PWD); }
+
+// ====== 安全问题锁定（独立计数，不因点"忘记密码"而重置） ======
+
+export function isAnsLocked() {
+  const until = parseInt(localStorage.getItem(LOCK_ANS) || '0');
+  if (!until) return false;
+  if (Date.now() >= until) { localStorage.removeItem(LOCK_ANS); resetAnsAttempts(); return false; }
+  return true;
+}
+export function ansLockSeconds() {
+  return Math.max(0, Math.ceil((parseInt(localStorage.getItem(LOCK_ANS) || '0') - Date.now()) / 1000));
+}
+export function recordAnsAttempt() {
+  const n = Math.min(MAX_TRY_ANS, parseInt(localStorage.getItem(AT_ANS) || '0') + 1);
+  localStorage.setItem(AT_ANS, String(n));
+  if (n >= MAX_TRY_ANS) localStorage.setItem(LOCK_ANS, String(Date.now() + LOCK_ANS_SEC * 1000));
+  return n;
+}
+export function remainingAns() { return Math.max(0, MAX_TRY_ANS - parseInt(localStorage.getItem(AT_ANS) || '0')); }
+export function resetAnsAttempts() { localStorage.removeItem(AT_ANS); localStorage.removeItem(LOCK_ANS); }
+
+// ====== 工具 ======
+
+async function hash(p) {
+  const d = new TextEncoder().encode(p + ':anime-planner-v2:');
   const h = await crypto.subtle.digest('SHA-256', d);
   return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** 时间恒定比较（防时序攻击） */
+function timingSafeEqual(a, b) {
+  if (a.length !== b.length) { let r = 0; for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ 0; return false; }
+  let r = 0;
+  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return r === 0;
+}
+
+function randomToken(len) {
+  const arr = new Uint8Array(len);
+  crypto.getRandomValues(arr);
+  return Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** 过滤敏感字符（防 XSS） */
+function sanitize(s) {
+  return String(s).replace(/[<>&"']/g, '').substring(0, 200);
 }

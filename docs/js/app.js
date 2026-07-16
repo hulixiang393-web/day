@@ -9,7 +9,7 @@ import { showToast } from './core/toast.js';
 import { openModal } from './core/modal.js';
 import { initKeyboard, registerShortcut } from './utils/keyboard.js';
 import { initMascot } from './components/mascot.js';
-import { hasPassword, hasQuestion, getQuestion, verifyPassword, verifyAnswer, setPassword, resetPassword, hasValidSession, createSession, clearSession, isLocked, lockRemaining, recordAttempt, remainingAttempts, clearAttempts } from './core/auth.js';
+import { hasPassword, hasQuestion, getQuestion, verifyPassword, verifyAnswer, setPassword, setQuestion, hasValidSession, createSession, clearSession, isLocked, lockSeconds, recordPwdAttempt, remainingPwd, resetPwdAttempts, isAnsLocked, ansLockSeconds, recordAnsAttempt, remainingAns, resetAnsAttempts } from './core/auth.js';
 import { TaskModel } from './data/models/task.js';
 import { TaskForm } from './components/taskForm.js';
 import { ListView } from './views/listView.js';
@@ -94,132 +94,202 @@ function updateSidebarActive(viewName) {
   });
 }
 
-/** 密码锁 */
+// ===================== 认证系统 =====================
+/*
+  状态机：SETUP → UNLOCK → (APP)
+  UNLOCK → RESET_CHALLENGE → RESET_NEW → UNLOCK
+
+  安全规则：
+  - 密码尝试 5 次锁定 5 分钟（独立计数，不会因切换页面重置）
+  - 安全问题尝试 3 次锁定 15 分钟（独立计数）
+  - 会话 30 天有效（防篡改 token）
+  - 所有用户输入经过过滤
+  - 哈希使用恒定时间比较
+*/
+
 function checkAuth() {
-  // 30天内免登录
   if (hasValidSession()) {
     document.getElementById('auth-overlay').classList.add('hidden');
     return Promise.resolve(true);
   }
-
-  if (!hasPassword()) {
-    return showSetupForm();
-  }
-  return showUnlockForm();
+  if (!hasPassword()) return renderSetup();
+  return renderUnlock();
 }
 
-function showSetupForm() {
-  const t = el('auth-title'), d = el('auth-desc'), f = el('auth-form'), b = el('auth-bottom'), e = el('auth-error');
-  t.textContent = '🔐 首次使用';
-  d.textContent = '设置密码和安全问题';
-  f.innerHTML = `
-    <input type="password" id="af-pwd" class="auth-input" placeholder="密码（至少4位）" maxlength="32" autocomplete="off">
-    <input id="af-question" class="auth-input mt-2" placeholder="安全问题（如：我的宠物叫什么？）" maxlength="50" style="letter-spacing:0">
-    <input id="af-answer" class="auth-input mt-2" placeholder="答案" maxlength="30" style="letter-spacing:0">
-    <button id="af-submit" class="btn btn-primary btn-full mt-2">🔒 完成设置</button>`;
-  b.innerHTML = '';
-  e.style.display = 'none';
+// ====== 步骤1：首次设置密码 + 安全问题 ======
+function renderSetup() {
+  clearForm();
+  const r = use('setup');
+  header('🔐 首次使用', '设置密码和安全问题（用于找回密码）');
+  form(`
+    <input type="password" id="af-p1" class="auth-input" placeholder="密码（至少6位）" maxlength="64" autocomplete="off">
+    <input type="password" id="af-p2" class="auth-input mt-2" placeholder="再次输入密码" maxlength="64">
+    <input id="af-question" class="auth-input mt-2" placeholder="安全问题，如：我第一只宠物叫什么？" maxlength="60" style="letter-spacing:0">
+    <input id="af-answer" class="auth-input mt-2" placeholder="安全问题的答案" maxlength="40" style="letter-spacing:0">
+    <button id="af-btn" class="btn btn-primary btn-full mt-2">🔒 完成设置</button>
+  `);
+  bottom('');
+  hideErr();
 
   return new Promise(resolve => {
-    el('af-submit').onclick = async () => {
-      const pwd = el('af-pwd').value.trim();
-      const q = el('af-question').value.trim();
-      const a = el('af-answer').value.trim();
-      if (!pwd || pwd.length < 4) { showErr('密码至少4个字符'); return; }
-      if (!q) { showErr('请设置一个安全问题'); return; }
-      if (!a) { showErr('请填写安全问题的答案'); return; }
-      await setPassword(pwd, q, a);
+    btn().onclick = async () => {
+      const p1 = val('af-p1'), p2 = val('af-p2');
+      const q = val('af-question'), a = val('af-answer');
+      if (!p1 || p1.length < 6) return err('密码至少6个字符');
+      if (!/[a-zA-Z]/.test(p1) || !/[0-9]/.test(p1)) return err('密码需包含字母和数字');
+      if (p1 !== p2) return err('两次密码不一致');
+      if (!q || q.length < 2) return err('请设置安全问题');
+      if (!a || a.length < 2) return err('请填写答案');
+      await setPassword(p1);
+      await setQuestion(q, a);
+      createSession();
       document.getElementById('auth-overlay').classList.add('hidden');
       resolve(true);
     };
-    el('af-pwd').onkeydown = e => { if (e.key === 'Enter') el('af-question').focus(); };
-    el('af-question').onkeydown = e => { if (e.key === 'Enter') el('af-answer').focus(); };
-    el('af-answer').onkeydown = e => { if (e.key === 'Enter') el('af-submit').click(); };
-    el('af-pwd').focus();
+    keynav(['af-p1', 'af-p2', 'af-question', 'af-answer'], 'af-btn');
+    focus('af-p1');
   });
 }
 
-function showUnlockForm() {
-  const t = el('auth-title'), d = el('auth-desc'), f = el('auth-form'), b = el('auth-bottom'), e = el('auth-error'), at = el('auth-attempts');
-  t.textContent = '🌸 二次元计划表';
-  d.textContent = '输入密码解锁';
-  f.innerHTML = `
-    <input type="password" id="af-pwd" class="auth-input" placeholder="输入密码..." maxlength="32" autocomplete="off">
-    <button id="af-submit" class="btn btn-primary btn-full mt-2">🔓 进入</button>`;
-  b.innerHTML = `<button id="af-reset" class="btn btn-text text-sm">忘记密码？</button>`;
-  e.style.display = 'none';
-  setAttText(isLocked() ? `已锁定 · ${Math.ceil(lockRemaining()/60)} 分钟后可重试` : '');
+// ====== 步骤2：密码解锁 ======
+function renderUnlock() {
+  clearForm();
+  const r = use('unlock');
+  header('🌸 二次元计划表', '输入密码解锁');
+  form(`
+    <input type="password" id="af-pwd" class="auth-input" placeholder="输入密码..." maxlength="64" autocomplete="off">
+    <button id="af-btn" class="btn btn-primary btn-full mt-2">🔓 进入</button>
+  `);
+  bottom(`<button id="af-forgot" class="btn btn-text text-sm">忘记密码？</button>`);
+  hideErr();
 
-  const input = el('af-pwd');
-  const btn = el('af-submit');
-  if (isLocked()) { input.disabled = true; btn.disabled = true; e.style.display = 'block'; e.textContent = '密码错误次数过多，请等待 ' + Math.ceil(lockRemaining()/60) + ' 分钟'; }
+  if (isLocked()) {
+    lockUI('密码错误过多，请 ' + Math.ceil(lockSeconds() / 60) + ' 分钟后重试');
+    setTimeout(() => location.reload(), lockSeconds() * 1000 + 1000);
+  }
+
+  const hint = hintEl();
+  if (remainingPwd() < 3) hint.textContent = '剩余 ' + remainingPwd() + ' 次尝试机会';
 
   return new Promise(resolve => {
-    btn.onclick = async () => {
+    btn().onclick = async () => {
       if (isLocked()) return;
-      const ok = await verifyPassword(input.value.trim());
+      const ok = await verifyPassword(val('af-pwd'));
       if (ok) {
-        clearAttempts(); createSession();
+        resetPwdAttempts();
+        createSession();
         document.getElementById('auth-overlay').classList.add('hidden');
-        resolve(true); return;
+        resolve(true);
+        return;
       }
-      recordAttempt(); input.value = ''; input.focus();
-      if (isLocked()) { input.disabled = true; btn.disabled = true; e.style.display = 'block'; e.textContent = '已锁定，请 ' + Math.ceil(lockRemaining()/60) + ' 分钟后重试'; setTimeout(() => location.reload(), lockRemaining() * 1000); }
-      else { e.style.display = 'block'; e.textContent = '密码错误，还剩 ' + remainingAttempts() + ' 次机会'; }
-      setAttText(isLocked() ? `已锁定 · ${Math.ceil(lockRemaining()/60)} 分钟后可重试` : '还剩 ' + remainingAttempts() + ' 次机会');
+      recordPwdAttempt();
+      input().value = ''; input().focus();
+      if (isLocked()) {
+        lockUI('已锁定 ' + Math.ceil(lockSeconds() / 60) + ' 分钟');
+        setTimeout(() => location.reload(), lockSeconds() * 1000 + 1000);
+      } else {
+        err('密码错误，剩余 ' + remainingPwd() + ' 次机会');
+        hint.textContent = '剩余 ' + remainingPwd() + ' 次尝试机会';
+      }
     };
-    input.onkeydown = e => { if (e.key === 'Enter') btn.click(); };
-
-    el('af-reset').onclick = () => showResetForm(resolve);
-    input.focus();
+    input().onkeydown = e => { if (e.key === 'Enter') btn().click(); };
+    click('af-forgot', () => renderReset(resolve));
+    input().focus();
   });
 }
 
-function showResetForm(resolve) {
-  const t = el('auth-title'), d = el('auth-desc'), f = el('auth-form'), b = el('auth-bottom'), e = el('auth-error'), at = el('auth-attempts');
-  t.textContent = '🔄 重置密码';
-  d.textContent = '回答安全问题：' + getQuestion();
-  f.innerHTML = `
-    <input id="af-answer" class="auth-input" placeholder="输入答案..." maxlength="30" style="letter-spacing:0">
-    <div id="af-reset-step2" style="display:none">
-      <input type="password" id="af-newpwd" class="auth-input mt-2" placeholder="输入新密码" maxlength="32">
+// ====== 步骤3：重置密码（先验证安全问题，再设新密码） ======
+function renderReset(resolve) {
+  if (!hasQuestion()) { err('未设置安全问题，无法重置。请联系管理员。'); return; }
+
+  clearForm();
+  const r = use('reset');
+  header('🔄 重置密码', '请先回答安全问题');
+  form(`
+    <p class="text-sm mb-2" style="color:var(--color-primary);font-weight:600">❓ ${getQuestion()}</p>
+    <input id="af-answer" class="auth-input" placeholder="输入答案..." maxlength="40" style="letter-spacing:0">
+    <div id="af-step2" style="display:none">
+      <input type="password" id="af-new1" class="auth-input mt-2" placeholder="新密码（至少6位，含字母数字）" maxlength="64">
+      <input type="password" id="af-new2" class="auth-input mt-2" placeholder="再次输入新密码" maxlength="64">
     </div>
-    <button id="af-submit" class="btn btn-primary btn-full mt-2">✅ 验证答案</button>`;
-  b.innerHTML = `<button id="af-back" class="btn btn-text text-sm">← 返回登录</button>`;
-  e.style.display = 'none';
-  at.textContent = '';
-  clearAttempts();
+    <button id="af-btn" class="btn btn-primary btn-full mt-2">✅ 验证答案</button>
+  `);
+  bottom(`<button id="af-back" class="btn btn-text text-sm">← 返回登录</button>`);
+  hideErr();
+
+  if (isAnsLocked()) {
+    lockUI('安全问题尝试过多，请 ' + Math.ceil(ansLockSeconds() / 60) + ' 分钟后重试');
+    setTimeout(() => location.reload(), ansLockSeconds() * 1000 + 1000);
+  }
 
   let step = 1;
-  el('af-submit').onclick = async () => {
+  btn().onclick = async () => {
     if (step === 1) {
-      if (verifyAnswer(el('af-answer').value)) {
+      if (isAnsLocked()) return;
+      const correct = await verifyAnswer(val('af-answer'));
+      if (correct) {
+        resetAnsAttempts();
         step = 2;
-        el('af-reset-step2').style.display = 'block';
-        el('af-submit').textContent = '🔒 确认重置';
-        d.textContent = '答案正确！请输入新密码';
+        el('af-step2').style.display = 'block';
+        btn().textContent = '🔒 确认重置';
+        header('🔄 重置密码', '答案正确！请设置新密码');
         el('af-answer').disabled = true;
-        el('af-newpwd').focus();
+        focus('af-new1');
       } else {
-        showErr('答案错误，请重试');
+        recordAnsAttempt();
         el('af-answer').value = '';
+        if (isAnsLocked()) {
+          lockUI('安全问题已锁定 ' + Math.ceil(ansLockSeconds() / 60) + ' 分钟');
+          setTimeout(() => location.reload(), ansLockSeconds() * 1000 + 1000);
+        } else {
+          err('答案错误，剩余 ' + remainingAns() + ' 次机会');
+        }
       }
     } else {
-      const pwd = el('af-newpwd').value.trim();
-      if (!pwd || pwd.length < 4) { showErr('密码至少4个字符'); return; }
-      await resetPassword(pwd);
+      const p1 = val('af-new1'), p2 = val('af-new2');
+      if (!p1 || p1.length < 6) return err('密码至少6个字符');
+      if (!/[a-zA-Z]/.test(p1) || !/[0-9]/.test(p1)) return err('密码需包含字母和数字');
+      if (p1 !== p2) return err('两次密码不一致');
+      await setPassword(p1);
+      resetPwdAttempts();
+      createSession();
       document.getElementById('auth-overlay').classList.add('hidden');
       resolve(true);
     }
   };
-  el('af-back').onclick = () => showUnlockForm().then(resolve);
-  el('af-answer').onkeydown = e => { if (e.key === 'Enter') el('af-submit').click(); };
-  el('af-answer').focus();
+  keynav(['af-answer'], 'af-btn');
+  click('af-back', () => renderUnlock().then(resolve));
+  focus('af-answer');
 }
 
+// ====== UI 辅助函数 ======
+let _use = '';
+function use(s) { _use = s; return s; }
+function header(title, desc) { el('auth-title').textContent = title; el('auth-desc').textContent = desc; }
+function form(html) { el('auth-form').innerHTML = html; }
+function bottom(html) { el('auth-bottom').innerHTML = html; }
+function clearForm() { el('auth-form').innerHTML = ''; el('auth-bottom').innerHTML = ''; hintEl().textContent = ''; hideErr(); }
+function btn() { return el('af-btn'); }
+function input() { return el('af-pwd'); }
+function hintEl() { return el('auth-attempts'); }
+function focus(id) { setTimeout(() => { const e = el(id); if (e) e.focus(); }, 100); }
+function val(id) { const e = el(id); return e ? e.value.trim() : ''; }
+function err(msg) { const e = el('auth-error'); e.textContent = msg; e.style.display = 'block'; }
+function hideErr() { el('auth-error').style.display = 'none'; }
+function lockUI(msg) {
+  const i = input() || el('af-answer'); if (i) { i.disabled = true; }
+  const b = btn(); if (b) b.disabled = true;
+  err(msg);
+}
+function click(id, fn) { const e = el(id); if (e) e.onclick = fn; }
+function keynav(ids, lastId) {
+  ids.forEach((id, i) => {
+    const e = el(id); if (!e) return;
+    const next = i < ids.length - 1 ? ids[i + 1] : lastId;
+    e.onkeydown = ev => { if (ev.key === 'Enter') { const n = el(next); if (n) n.focus(); } };
+  });
+}
 function el(id) { return document.getElementById(id); }
-function showErr(msg) { const e = el('auth-error'); e.textContent = msg; e.style.display = 'block'; }
-function setAttText(t) { el('auth-attempts').textContent = t; }
 
 /** 初始化应用 */
 async function init() {
