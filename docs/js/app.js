@@ -388,4 +388,7 @@ function applyWallpaper(wallpaper) {
 }
 
 // DOM 加载完成后启动
-document.addEventListener('DOMContentLoaded', init);
+// 隐私验证：未通过前不会初始化应用
+document.addEventListener('DOMContentLoaded', () => {
+  PG.check(init);
+});
