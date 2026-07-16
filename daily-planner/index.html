@@ -1770,18 +1770,15 @@ const App = {
       </div>
       <div class="settings-section">
         <h4>📱 设备互通（手机 ⇄ 电脑）</h4>
-        <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px">数据经AES加密后通过剪贴板或二维码传输，无需服务器</p>
+        <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px">AES加密 → 复制 → 发送 → 粘贴 → 解密导入</p>
         <div class="form-group"><label>传输密码（两端必须一致）</label><input type="password" class="input" id="sync-password" placeholder="设置一个传输专用密码，至少6位" value="${ClipboardSync.getPassword()||''}"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-          <button class="btn btn-primary btn-sm" onclick="ClipboardSync.copyToClipboard()">📋 复制到剪贴板</button>
-          <button class="btn btn-secondary btn-sm" onclick="ClipboardSync.pasteFromClipboard()">📋 从剪贴板导入</button>
-          <button class="btn btn-secondary btn-sm" onclick="ClipboardSync.showQRCode()">📱 显示二维码</button>
-          <button class="btn btn-secondary btn-sm" onclick="ClipboardSync.scanQRCode()">📷 扫描二维码</button>
+          <button class="btn btn-primary btn-sm" onclick="ClipboardSync.copyToClipboard()">📋 复制加密数据</button>
+          <button class="btn btn-secondary btn-sm" onclick="ClipboardSync.pasteFromClipboard()">📋 粘贴并导入</button>
         </div>
         <p style="font-size:0.7rem;color:var(--text-muted)">
-          ① 设备A：点「复制到剪贴板」或「显示二维码」<br>
-          ② 设备B：点「从剪贴板导入」或「扫描二维码」<br>
-          ③ 两端使用相同传输密码即可解密
+          ① 设备A点「复制加密数据」→ 通过微信/短信发送给自己<br>
+          ② 设备B点「粘贴并导入」→ 粘贴 → 完成同步
         </p>
       </div>
       <div class="settings-section">
@@ -3094,38 +3091,15 @@ const Backup = {
 // ============================================================
 
 // ============================================================
-// PART 22.5: 剪贴板+二维码同步模块
+
+// ============================================================
+// PART 22.5: 剪贴板同步模块
 // ============================================================
 const ClipboardSync = {
   _configKey: "dp_sync_config",
 
   getPassword() { try { return JSON.parse(localStorage.getItem(this._configKey)||"{}").syncPassword || ""; } catch(e) { return ""; } },
   savePassword(pw) { localStorage.setItem(this._configKey, JSON.stringify({syncPassword: pw})); },
-
-  // 压缩文本（使用浏览器原生 gzip）
-  async _gzip(text) {
-    if(typeof CompressionStream === "undefined") return text; // 不支持则跳过
-    try {
-      var stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
-      var buf = await new Response(stream).arrayBuffer();
-      var arr = new Uint8Array(buf);
-      var b64 = "";
-      for(var i=0; i<arr.length; i++) b64 += String.fromCharCode(arr[i]);
-      return btoa(b64);
-    } catch(e) { return text; }
-  },
-
-  // 解压
-  async _gunzip(b64) {
-    if(typeof DecompressionStream === "undefined") return null;
-    try {
-      var raw = atob(b64);
-      var arr = new Uint8Array(raw.length);
-      for(var i=0; i<raw.length; i++) arr[i] = raw.charCodeAt(i);
-      var stream = new Blob([arr]).stream().pipeThrough(new DecompressionStream("gzip"));
-      return await new Response(stream).text();
-    } catch(e) { return null; }
-  },
 
   async _packAndEncrypt(pw) {
     if(!pw || pw.length < 6) { App.toast("请先设置传输密码（至少6位），两端必须一致","error"); return null; }
@@ -3135,194 +3109,68 @@ const ClipboardSync = {
       categories: Store.get("categories"), plans: Store.get("plans"), tasks: Store.get("tasks"),
       tags: Store.get("tags"),
     };
-    try {
-      var json = JSON.stringify(data);
-      // gzip 压缩（减少60-80%体积）
-      var compressed = await this._gzip(json);
-      var encrypted = await aesEncrypt(compressed, pw);
-      // 标记是否压缩过
-      return "C:" + encrypted;
-    } catch(e) { App.toast("加密失败: "+e.message,"error"); return null; }
+    try { return await aesEncrypt(JSON.stringify(data), pw); }
+    catch(e) { App.toast("加密失败: "+e.message,"error"); return null; }
   },
 
   async copyToClipboard() {
-    var pwEl = document.getElementById("sync-password");
-    var pw = pwEl ? pwEl.value : this.getPassword();
+    var pw = (document.getElementById("sync-password")||{}).value || this.getPassword();
     if(!pw || pw.length < 6) { App.toast("请先在上方设置传输密码（至少6位）","error"); return; }
     this.savePassword(pw);
     App.toast("正在加密...","info");
     var encrypted = await this._packAndEncrypt(pw);
     if(!encrypted) return;
-    try {
-      await navigator.clipboard.writeText(encrypted);
-      App.toast("已复制到剪贴板！📋 在另一设备粘贴即可","success");
-    } catch(e) {
-      var ta = document.createElement("textarea");
-      ta.value = encrypted; ta.style.position = "fixed"; ta.style.opacity = "0";
+    try { await navigator.clipboard.writeText(encrypted); App.toast("已复制！在另一设备粘贴导入即可 📋","success"); }
+    catch(e) {
+      var ta = document.createElement("textarea"); ta.value = encrypted;
+      ta.style.cssText = "position:fixed;opacity:0";
       document.body.appendChild(ta); ta.select();
-      document.execCommand("copy"); document.body.removeChild(ta);
-      App.toast("已复制！长度: "+encrypted.length+" 字符","success");
+      try { document.execCommand("copy"); App.toast("已复制！","success"); } catch(e2) { App.toast("复制失败，请手动选择文本","error"); }
+      document.body.removeChild(ta);
     }
   },
 
   async pasteFromClipboard() {
-    var pwEl = document.getElementById("sync-password");
-    var pw = pwEl ? pwEl.value : this.getPassword();
+    var pw = (document.getElementById("sync-password")||{}).value || this.getPassword();
     if(!pw || pw.length < 6) { App.toast("请先在上方设置传输密码（至少6位）","error"); return; }
     this.savePassword(pw);
     var encrypted = prompt("请粘贴从另一设备复制的加密数据：");
     if(!encrypted) return;
-    encrypted = encrypted.trim();
-    await this._decryptAndImport(encrypted, pw);
+    await this._decryptAndImport(encrypted.trim(), pw);
   },
 
   async _decryptAndImport(encrypted, pw) {
-    App.toast("正在解密...","info");
+    App.toast("正在解密导入...","info");
     try {
-      // 去掉压缩标记
-      var isCompressed = false;
-      if(encrypted.substring(0,2) === "C:") { isCompressed = true; encrypted = encrypted.substring(2); }
       var decrypted = await aesDecrypt(encrypted, pw);
       if(!decrypted) { App.toast("解密失败！请确认传输密码与导出时一致","error"); return; }
-
-      // 尝试解压
-      var json = decrypted;
-      if(isCompressed) {
-        var decompressed = await this._gunzip(decrypted);
-        if(decompressed) json = decompressed;
-      }
-
-      var data = JSON.parse(json);
+      var data = JSON.parse(decrypted);
       if(!data.version || !Array.isArray(data.plans)) { App.toast("数据格式无效","error"); return; }
       var imported = 0;
       if(data.plans) {
-        var existingPlans = Store.get("plans")||[];
-        var existingIds = new Set(existingPlans.map(function(p){return p.id;}));
-        data.plans.forEach(function(p){ if(!existingIds.has(p.id)) { existingPlans.push(p); imported++; } });
-        Store.set("plans", existingPlans);
+        var ep = Store.get("plans")||[], eIds = new Set(ep.map(function(p){return p.id;}));
+        data.plans.forEach(function(p){ if(!eIds.has(p.id)){ep.push(p);imported++;} });
+        Store.set("plans", ep);
       }
       if(data.tasks) {
-        var existingTasks = Store.get("tasks")||[];
-        var existingTIds = new Set(existingTasks.map(function(t){return t.id;}));
-        data.tasks.forEach(function(t){ if(!existingTIds.has(t.id)) existingTasks.push(t); });
-        Store.set("tasks", existingTasks);
+        var et = Store.get("tasks")||[], tIds = new Set(et.map(function(t){return t.id;}));
+        data.tasks.forEach(function(t){ if(!tIds.has(t.id)) et.push(t); });
+        Store.set("tasks", et);
       }
       if(data.tags) {
-        var existingTags = Store.tags();
-        data.tags.forEach(function(t){ if(existingTags.indexOf(t)===-1) existingTags.push(t); });
-        Store.set("tags", existingTags);
+        var tags = Store.tags();
+        data.tags.forEach(function(t){ if(tags.indexOf(t)===-1) tags.push(t); });
+        Store.set("tags", tags);
       }
       if(data.categories) {
-        var existingCats = Store.categories();
-        var existingCIds = new Set(existingCats.map(function(c){return c.id;}));
-        data.categories.forEach(function(c){ if(!existingCIds.has(c.id)) existingCats.push(c); });
-        Store.set("categories", existingCats);
-      }
-      if(data.summaries) {
-        var existingSums = Store.get("summaries")||[];
-        var existingSIds = new Set(existingSums.map(function(s){return s.weekStart;}));
-        data.summaries.forEach(function(s){ if(!existingSIds.has(s.weekStart)) existingSums.push(s); });
-        Store.set("summaries", existingSums);
+        var ec = Store.categories(), cIds = new Set(ec.map(function(c){return c.id;}));
+        data.categories.forEach(function(c){ if(!cIds.has(c.id)) ec.push(c); });
+        Store.set("categories", ec);
       }
       EventBus.emit("data-changed", {type:"sync-import"});
       App.toast("同步成功！导入 "+imported+" 个计划 📥","success");
-      App.refreshCurrentView();
-      App.renderCategories();
+      App.refreshCurrentView(); App.renderCategories();
     } catch(e) { App.toast("导入失败: "+e.message,"error"); }
-  },
-
-  async showQRCode() {
-    var pwEl = document.getElementById("sync-password");
-    var pw = pwEl ? pwEl.value : this.getPassword();
-    if(!pw || pw.length < 6) { App.toast("请先在上方设置传输密码（至少6位）","error"); return; }
-    this.savePassword(pw);
-    App.toast("正在生成二维码...","info");
-    var encrypted = await this._packAndEncrypt(pw);
-    if(!encrypted) return;
-
-    var size = encrypted.length > 800 ? "500x500" : "350x350";
-    var qrUrl = "https://api.qrserver.com/v1/create-qr-code/?size="+size+"&data=" + encodeURIComponent(encrypted);
-    var content = "<div style=\"text-align:center\">"+
-      "<p style=\"margin-bottom:12px\">📱 用另一设备扫描此二维码</p>"+
-      "<img src=\""+qrUrl+"\" style=\"max-width:100%;border-radius:8px\" onerror=\"this.parentElement.innerHTML='<p style=color:red>二维码生成失败，数据过大<br>请改用📋剪贴板方式</p>'\">"+
-      "<p style=\"font-size:0.7rem;color:var(--text-muted);margin-top:8px\">数据已gzip压缩+AES加密 ("+encrypted.length+"字符)</p>"+
-      "</div>";
-    Modal.show(content, {title:"📱 二维码传输", narrow:true});
-  },
-
-  // 拍照扫码（全浏览器兼容：通过文件上传 + qrserver API 解码）
-  async scanQRCode() {
-    var pwEl = document.getElementById("sync-password");
-    var pw = pwEl ? pwEl.value : this.getPassword();
-    if(!pw || pw.length < 6) { App.toast("请先在上方设置传输密码（至少6位）","error"); return; }
-    this.savePassword(pw);
-
-    var content = "<div style=\"text-align:center\">"+
-      "<p style=\"margin-bottom:12px;font-size:0.9rem\">📷 拍摄或选择二维码图片</p>"+
-      "<input type=\"file\" id=\"qr-file-input\" accept=\"image/*\" capture=\"environment\" style=\"display:block;margin:0 auto 12px;font-size:0.9rem\">"+
-      "<p style=\"font-size:0.75rem;color:var(--text-muted)\">手机端会自动打开后置摄像头</p>"+
-      "<p id=\"qr-decode-status\" style=\"font-size:0.8rem;color:var(--text-secondary);margin-top:8px\"></p>"+
-      "<div style=\"margin-top:16px;padding-top:12px;border-top:1px solid var(--border-light)\">"+
-      "<p style=\"font-size:0.75rem;color:var(--text-muted);margin-bottom:6px\">或者手动粘贴：</p>"+
-      "<textarea class=\"input\" id=\"qr-manual-input\" rows=\"3\" placeholder=\"在此粘贴加密数据...\" style=\"font-size:0.75rem\"></textarea>"+
-      "</div>"+
-      "</div>";
-    var footer = "<button class=\"btn btn-secondary\" onclick=\"Modal.close()\">取消</button>"+
-      "<button class=\"btn btn-primary\" onclick=\"ClipboardSync._manualQRInput()\">粘贴导入</button>";
-    Modal.show(content, {title:"📷 扫码接收", footer, narrow:true});
-
-    // 绑定文件选择事件
-    var self = this;
-    setTimeout(function() {
-      var fileInput = document.getElementById("qr-file-input");
-      if(fileInput) {
-        fileInput.addEventListener("change", function() {
-          self._decodeQRFile(this.files[0], pw);
-        });
-      }
-    }, 100);
-  },
-
-  _decodeQRFile(file, pw) {
-    if(!file) return;
-    var statusEl = document.getElementById("qr-decode-status");
-    if(statusEl) statusEl.textContent = "正在解码...";
-    var self = this;
-
-    var formData = new FormData();
-    formData.append("file", file);
-
-    fetch("https://api.qrserver.com/v1/read-qr-code/", {
-      method: "POST",
-      body: formData
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(result) {
-      if(result && result[0] && result[0].symbol && result[0].symbol[0]) {
-        var encrypted = result[0].symbol[0].data;
-        if(!encrypted) {
-          if(statusEl) statusEl.textContent = "未识别到二维码，请重试";
-          return;
-        }
-        if(statusEl) statusEl.textContent = "✅ 识别成功！正在导入...";
-        Modal.close();
-        self._decryptAndImport(encrypted, pw);
-      } else {
-        if(statusEl) statusEl.textContent = "❌ 未检测到二维码，请确保图片清晰";
-      }
-    })
-    .catch(function(e) {
-      if(statusEl) statusEl.textContent = "❌ 解码失败: " + e.message;
-    });
-  },
-
-  _manualQRInput() {
-    var encrypted = document.getElementById("qr-manual-input").value.trim();
-    if(!encrypted) { App.toast("请粘贴加密数据","error"); return; }
-    var pwEl = document.getElementById("sync-password");
-    var pw = pwEl ? pwEl.value : this.getPassword();
-    Modal.close();
-    this._decryptAndImport(encrypted, pw);
   }
 };
 
