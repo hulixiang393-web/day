@@ -2135,6 +2135,7 @@ App.renderListView = function() {
 // ---- 日视图 ----
 App.renderDayView = function(date) {
   const d = date || today();
+  App._currentDayDate = d; // 记录当前日期，供拖拽后恢复
   const container = document.getElementById('view-day');
   const plans = Store.plans();
   const allTasks = Store.tasks();
@@ -2458,7 +2459,7 @@ const DayViewDrag = {
       DayViewDrag._dragging = null;
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
-      App.renderDayView();
+      App.renderDayView(App._currentDayDate);
     };
 
     document.addEventListener('mousemove', onMove);
@@ -2509,7 +2510,7 @@ const DayViewDrag = {
       DayViewDrag._dragging = null;
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
-      App.renderDayView();
+      App.renderDayView(App._currentDayDate);
     };
 
     document.addEventListener('mousemove', onMove);
