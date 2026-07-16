@@ -1750,6 +1750,7 @@ const App = {
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
           <button class="btn btn-secondary btn-sm" onclick="CloudSync.upload()">📤 上传到云端</button>
           <button class="btn btn-secondary btn-sm" onclick="CloudSync.download()">📥 从云端下载</button>
+          <button class="btn btn-secondary btn-sm" onclick="CloudSync.diagnose()">🔍 诊断</button>
         </div>
         <label class="toggle-wrap">自动同步 <div class="toggle-track${CloudSync.isAutoSync()?' active':''}" onclick="App.settingToggle(this,'cloudAutoSync');CloudSync.toggleAuto()"></div></label>
         <span style="font-size:0.7rem;color:var(--text-muted);margin-left:8px" id="sync-status">${CloudSync.getLastSync()?'上次同步: '+formatDate(CloudSync.getLastSync().slice(0,10)):'未同步'}</span>
@@ -3121,6 +3122,11 @@ const CloudSync = {
 
     this.saveConfig({token: token, repo: repo, syncPassword: syncPw});
 
+    // 检查加密API可用性
+    if(!window.crypto || !window.crypto.subtle) {
+      App.toast('加密API不可用，请使用HTTPS访问','error'); return;
+    }
+
     App.toast('正在加密并上传...','info');
     try {
       var json = this.packData();
@@ -3132,7 +3138,7 @@ const CloudSync = {
           headers: { 'Authorization': 'token '+token, 'Accept': 'application/vnd.github+json' }
         });
         if(getResp.ok) { var fi = await getResp.json(); sha = fi.sha; }
-      } catch(e) {}
+      } catch(e) { console.log('get sha failed:', e); }
 
       var body = {
         message: 'sync: '+today(),
@@ -3153,11 +3159,12 @@ const CloudSync = {
         if(stEl) stEl.textContent = '上次同步: '+formatDate(today());
         App.toast('同步上传成功！☁','success');
       } else {
-        var err = await resp.json();
+        var err = await resp.json().catch(function(){return {message:'HTTP '+resp.status};});
         App.toast('上传失败: '+(err.message||resp.status),'error');
       }
     } catch(e) {
-      App.toast('上传失败: '+e.message,'error');
+      App.toast('上传异常: '+e.message,'error');
+      console.error('CloudSync upload error:', e);
     }
   },
 
@@ -3171,6 +3178,10 @@ const CloudSync = {
 
     this.saveConfig({token: token, repo: repo, syncPassword: syncPw});
 
+    if(!window.crypto || !window.crypto.subtle) {
+      App.toast('加密API不可用，请使用HTTPS访问','error'); return;
+    }
+
     App.toast('正在从云端下载...','info');
     try {
       var resp = await fetch('https://api.github.com/repos/'+repo+'/contents/backup/sync.apbak', {
@@ -3178,13 +3189,12 @@ const CloudSync = {
       });
 
       if(!resp.ok) {
-        if(resp.status === 404) { App.toast('云端暂无备份，请先上传','info'); }
-        else { var err2 = await resp.json(); App.toast('下载失败: '+(err2.message||resp.status),'error'); }
+        if(resp.status === 404) { App.toast('云端暂无备份，请先在另一设备上传','info'); }
+        else { var err2 = await resp.json().catch(function(){return {message:'HTTP '+resp.status};}); App.toast('下载失败: '+(err2.message||resp.status),'error'); }
         return;
       }
 
       var info = await resp.json();
-      // GitHub API content 是 base64，aesDecrypt 内部会 atob 解码
       var encrypted = info.content.replace(/\n/g, '');
 
       var decrypted = await aesDecrypt(encrypted, syncPw);
@@ -3242,8 +3252,36 @@ const CloudSync = {
       App.refreshCurrentView();
       App.renderCategories();
     } catch(e) {
-      App.toast('下载失败: '+e.message,'error');
+      App.toast('下载异常: '+e.message,'error');
+      console.error('CloudSync download error:', e);
     }
+  },
+
+  // 诊断：检查同步所需的所有API是否可用
+  async diagnose() {
+    var results = [];
+    // 1. 检查 HTTPS
+    results.push(location.protocol==='https:'?'✅ HTTPS':'❌ 非HTTPS（加密API需要）');
+    // 2. 检查 crypto.subtle
+    results.push((window.crypto&&window.crypto.subtle)?'✅ 加密API可用':'❌ 加密API不可用');
+    // 3. 检查 localStorage
+    try { localStorage.setItem('_test','1'); localStorage.removeItem('_test'); results.push('✅ 本地存储可用'); }
+    catch(e) { results.push('❌ 本地存储不可用: '+e.message); }
+    // 4. 检查 fetch
+    try { var r=await fetch('https://api.github.com/zen',{headers:{'Accept':'text/plain'}}); results.push(r.ok?'✅ 网络连接正常':'⚠ 网络连接异常: HTTP '+r.status); }
+    catch(e) { results.push('❌ 网络请求失败: '+e.message); }
+    // 5. 检查 Token
+    var token = this.getToken();
+    if(!token) { results.push('⚠ 未设置GitHub Token'); }
+    else {
+      try {
+        var tr=await fetch('https://api.github.com/user',{headers:{'Authorization':'token '+token,'Accept':'application/vnd.github+json'}});
+        results.push(tr.ok?'✅ Token有效':'❌ Token无效: HTTP '+tr.status);
+      } catch(e) { results.push('❌ Token验证失败: '+e.message); }
+    }
+    var msg = '=== 同步诊断 ===\n'+results.join('\n');
+    alert(msg);
+    console.log(msg);
   },
 
   init() {
