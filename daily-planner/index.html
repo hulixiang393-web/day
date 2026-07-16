@@ -1743,9 +1743,10 @@ const App = {
       </div>
       <div class="settings-section">
         <h4>☁ 云端同步（手机 ⇄ 电脑互通）</h4>
-        <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px">数据经AES加密后存至GitHub，两端自动拉取实现互通</p>
+        <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px">数据经AES加密后存至GitHub，两端填入相同配置即可互通</p>
         <div class="form-group"><label>GitHub Token</label><input type="password" class="input" id="sync-token" placeholder="ghp_xxxxxxxxxxxx" value="${CloudSync.getToken()||''}"></div>
         <div class="form-group"><label>仓库路径</label><input type="text" class="input" id="sync-repo" placeholder="用户名/仓库名" value="${CloudSync.getRepo()||'hulixiang393-web/day'}"></div>
+        <div class="form-group"><label>同步密码（两端必须一致）</label><input type="password" class="input" id="sync-password" placeholder="设置一个同步专用密码" value="${CloudSync.getSyncPassword()||''}"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
           <button class="btn btn-secondary btn-sm" onclick="CloudSync.upload()">📤 上传到云端</button>
           <button class="btn btn-secondary btn-sm" onclick="CloudSync.download()">📥 从云端下载</button>
@@ -1792,8 +1793,9 @@ const App = {
     // 保存云同步配置
     var syncToken = document.getElementById('sync-token');
     var syncRepo = document.getElementById('sync-repo');
+    var syncPw = document.getElementById('sync-password');
     if(syncToken && syncRepo) {
-      CloudSync.saveConfig({token: syncToken.value, repo: syncRepo.value});
+      CloudSync.saveConfig({token: syncToken.value, repo: syncRepo.value, syncPassword: syncPw ? syncPw.value : ''});
     }
     Modal.close();
     App.toast('设置已保存','success');
@@ -3077,6 +3079,7 @@ const CloudSync = {
   },
   getToken() { return this.getConfig().token || ''; },
   getRepo() { return this.getConfig().repo || 'hulixiang393-web/day'; },
+  getSyncPassword() { return this.getConfig().syncPassword || ''; },
   isAutoSync() { return this.getConfig().autoSync === true; },
   getLastSync() { return this.getConfig().lastSync || null; },
   setLastSync() { this.saveConfig({lastSync: now()}); },
@@ -3086,7 +3089,13 @@ const CloudSync = {
     if(this.isAutoSync()) { this.download(); }
   },
 
-  // 打包当前数据
+  _getSyncKey() {
+    var pw = this.getSyncPassword();
+    if(!pw) { App.toast('请先在设置中填写同步密码（两端必须一致）','error'); return null; }
+    if(pw.length < 6) { App.toast('同步密码至少6位','error'); return null; }
+    return pw;
+  },
+
   packData() {
     var data = {
       version: 2,
@@ -3102,33 +3111,32 @@ const CloudSync = {
     return JSON.stringify(data);
   },
 
-  // 上传到 GitHub
   async upload() {
     var token = document.getElementById('sync-token') ? document.getElementById('sync-token').value : this.getToken();
     var repo = document.getElementById('sync-repo') ? document.getElementById('sync-repo').value : this.getRepo();
+    var syncPwEl = document.getElementById('sync-password');
+    var syncPw = syncPwEl ? syncPwEl.value : this.getSyncPassword();
     if(!token) { App.toast('请先设置 GitHub Token','error'); return; }
-    if(token !== this.getToken()) this.saveConfig({token: token});
-    if(repo !== this.getRepo()) this.saveConfig({repo: repo});
+    if(!syncPw || syncPw.length < 6) { App.toast('请先设置同步密码（至少6位，两端必须一致）','error'); return; }
+
+    this.saveConfig({token: token, repo: repo, syncPassword: syncPw});
 
     App.toast('正在加密并上传...','info');
     try {
       var json = this.packData();
-      var syncPw = Store.settings().passwordHash || 'anime-planner-default';
       var encrypted = await aesEncrypt(json, syncPw);
 
-      // 获取文件 SHA（如果存在）
       var sha = null;
       try {
         var getResp = await fetch('https://api.github.com/repos/'+repo+'/contents/backup/sync.apbak', {
           headers: { 'Authorization': 'token '+token, 'Accept': 'application/vnd.github+json' }
         });
-        if(getResp.ok) { var info = await getResp.json(); sha = info.sha; }
+        if(getResp.ok) { var fi = await getResp.json(); sha = fi.sha; }
       } catch(e) {}
 
-      // 上传
       var body = {
         message: 'sync: '+today(),
-        content: btoa(unescape(encodeURIComponent(encrypted))),
+        content: encrypted,
         branch: 'main'
       };
       if(sha) body.sha = sha;
@@ -3141,7 +3149,8 @@ const CloudSync = {
 
       if(resp.ok) {
         this.setLastSync();
-        document.getElementById('sync-status').textContent = '上次同步: '+formatDate(today());
+        var stEl = document.getElementById('sync-status');
+        if(stEl) stEl.textContent = '上次同步: '+formatDate(today());
         App.toast('同步上传成功！☁','success');
       } else {
         var err = await resp.json();
@@ -3152,13 +3161,15 @@ const CloudSync = {
     }
   },
 
-  // 从 GitHub 下载
   async download() {
     var token = document.getElementById('sync-token') ? document.getElementById('sync-token').value : this.getToken();
     var repo = document.getElementById('sync-repo') ? document.getElementById('sync-repo').value : this.getRepo();
+    var syncPwEl = document.getElementById('sync-password');
+    var syncPw = syncPwEl ? syncPwEl.value : this.getSyncPassword();
     if(!token) { App.toast('请先设置 GitHub Token','error'); return; }
-    if(token !== this.getToken()) this.saveConfig({token: token});
-    if(repo !== this.getRepo()) this.saveConfig({repo: repo});
+    if(!syncPw || syncPw.length < 6) { App.toast('请先设置同步密码（至少6位，两端必须一致）','error'); return; }
+
+    this.saveConfig({token: token, repo: repo, syncPassword: syncPw});
 
     App.toast('正在从云端下载...','info');
     try {
@@ -3168,28 +3179,27 @@ const CloudSync = {
 
       if(!resp.ok) {
         if(resp.status === 404) { App.toast('云端暂无备份，请先上传','info'); }
-        else { var err = await resp.json(); App.toast('下载失败: '+(err.message||resp.status),'error'); }
+        else { var err2 = await resp.json(); App.toast('下载失败: '+(err2.message||resp.status),'error'); }
         return;
       }
 
       var info = await resp.json();
-      var encrypted = decodeURIComponent(escape(atob(info.content)));
-      var syncPw = Store.settings().passwordHash || 'anime-planner-default';
+      // GitHub API 返回的 content 是 base64 编码
+      var encrypted = atob(info.content.replace(/\n/g, ''));
 
-      // 尝试解密
       var decrypted = await aesDecrypt(encrypted, syncPw);
       if(!decrypted) {
-        App.toast('解密失败，密码不匹配','error');
+        App.toast('解密失败！请确认同步密码与上传时一致','error');
         return;
       }
 
       var data = JSON.parse(decrypted);
-      if(!data.version || !data.plans) {
+      if(!data.version || (!Array.isArray(data.plans) && !Array.isArray(data.tasks))) {
         App.toast('云端数据格式无效','error');
         return;
       }
 
-      // 合并模式导入（保留本地独有数据）
+      // 合并模式导入
       if(data.plans) {
         var existingPlans = Store.get('plans')||[];
         var existingIds = new Set(existingPlans.map(function(p){return p.id;}));
@@ -3225,7 +3235,8 @@ const CloudSync = {
       }
 
       this.setLastSync();
-      document.getElementById('sync-status').textContent = '上次同步: '+formatDate(today());
+      var stEl2 = document.getElementById('sync-status');
+      if(stEl2) stEl2.textContent = '上次同步: '+formatDate(today());
       EventBus.emit('data-changed', {type:'sync-import'});
       App.toast('云端数据同步成功！☁','success');
       App.refreshCurrentView();
@@ -3235,12 +3246,9 @@ const CloudSync = {
     }
   },
 
-  // 自动同步初始化
   init() {
     if(this.isAutoSync()) {
-      // 启动时自动拉取
       setTimeout(function(){ CloudSync.download(); }, 2000);
-      // 每30分钟自动拉取
       setInterval(function(){ CloudSync.download(); }, 1800000);
     }
   }
