@@ -1104,6 +1104,7 @@ const App = {
     Mascot.say('greeting');
     Keyboard.init();
     Reminder.init();
+    CloudSync.init();
     this.startIdleTimer();
     if(!this._initialized) {
       EventBus.on('data-changed', () => {
@@ -1741,6 +1742,18 @@ const App = {
         <div class="form-group"><label>闲置锁定时间(分钟，0=不锁定)</label><input type="number" class="input" id="set-lock-timeout" value="${s.lockTimeout||30}" min="0" max="480"></div>
       </div>
       <div class="settings-section">
+        <h4>☁ 云端同步（手机 ⇄ 电脑互通）</h4>
+        <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px">数据经AES加密后存至GitHub，两端自动拉取实现互通</p>
+        <div class="form-group"><label>GitHub Token</label><input type="password" class="input" id="sync-token" placeholder="ghp_xxxxxxxxxxxx" value="${CloudSync.getToken()||''}"></div>
+        <div class="form-group"><label>仓库路径</label><input type="text" class="input" id="sync-repo" placeholder="用户名/仓库名" value="${CloudSync.getRepo()||'hulixiang393-web/day'}"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <button class="btn btn-secondary btn-sm" onclick="CloudSync.upload()">📤 上传到云端</button>
+          <button class="btn btn-secondary btn-sm" onclick="CloudSync.download()">📥 从云端下载</button>
+        </div>
+        <label class="toggle-wrap">自动同步 <div class="toggle-track${CloudSync.isAutoSync()?' active':''}" onclick="App.settingToggle(this,'cloudAutoSync');CloudSync.toggleAuto()"></div></label>
+        <span style="font-size:0.7rem;color:var(--text-muted);margin-left:8px" id="sync-status">${CloudSync.getLastSync()?'上次同步: '+formatDate(CloudSync.getLastSync().slice(0,10)):'未同步'}</span>
+      </div>
+      <div class="settings-section">
         <h4>💾 数据管理</h4>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-secondary btn-sm" onclick="Modal.close();App.showBatchImport()">📥 批量导入</button>
@@ -1776,6 +1789,12 @@ const App = {
       defaultReminder: parseInt(document.getElementById('set-default-reminder').value)||15,
       lockTimeout: parseInt(document.getElementById('set-lock-timeout').value)||30,
     });
+    // 保存云同步配置
+    var syncToken = document.getElementById('sync-token');
+    var syncRepo = document.getElementById('sync-repo');
+    if(syncToken && syncRepo) {
+      CloudSync.saveConfig({token: syncToken.value, repo: syncRepo.value});
+    }
     Modal.close();
     App.toast('设置已保存','success');
     App.startIdleTimer();
@@ -3042,6 +3061,189 @@ const Backup = {
     };
     input.click();
   },
+};
+
+// ============================================================
+// PART 22.5: 云同步模块
+// ============================================================
+const CloudSync = {
+  _configKey: 'dp_sync_config',
+
+  getConfig() {
+    try { return JSON.parse(localStorage.getItem(this._configKey)) || {}; } catch(e) { return {}; }
+  },
+  saveConfig(cfg) {
+    localStorage.setItem(this._configKey, JSON.stringify({...this.getConfig(), ...cfg}));
+  },
+  getToken() { return this.getConfig().token || ''; },
+  getRepo() { return this.getConfig().repo || 'hulixiang393-web/day'; },
+  isAutoSync() { return this.getConfig().autoSync === true; },
+  getLastSync() { return this.getConfig().lastSync || null; },
+  setLastSync() { this.saveConfig({lastSync: now()}); },
+
+  toggleAuto() {
+    this.saveConfig({autoSync: !this.isAutoSync()});
+    if(this.isAutoSync()) { this.download(); }
+  },
+
+  // 打包当前数据
+  packData() {
+    var data = {
+      version: 2,
+      exportedAt: now(),
+      categories: Store.get('categories'),
+      plans: Store.get('plans'),
+      tasks: Store.get('tasks'),
+      tags: Store.get('tags'),
+      recycle: Store.get('recycle'),
+      summaries: Store.get('summaries'),
+      focus_logs: Store.get('focus_logs'),
+    };
+    return JSON.stringify(data);
+  },
+
+  // 上传到 GitHub
+  async upload() {
+    var token = document.getElementById('sync-token') ? document.getElementById('sync-token').value : this.getToken();
+    var repo = document.getElementById('sync-repo') ? document.getElementById('sync-repo').value : this.getRepo();
+    if(!token) { App.toast('请先设置 GitHub Token','error'); return; }
+    if(token !== this.getToken()) this.saveConfig({token: token});
+    if(repo !== this.getRepo()) this.saveConfig({repo: repo});
+
+    App.toast('正在加密并上传...','info');
+    try {
+      var json = this.packData();
+      var syncPw = Store.settings().passwordHash || 'anime-planner-default';
+      var encrypted = await aesEncrypt(json, syncPw);
+
+      // 获取文件 SHA（如果存在）
+      var sha = null;
+      try {
+        var getResp = await fetch('https://api.github.com/repos/'+repo+'/contents/backup/sync.apbak', {
+          headers: { 'Authorization': 'token '+token, 'Accept': 'application/vnd.github+json' }
+        });
+        if(getResp.ok) { var info = await getResp.json(); sha = info.sha; }
+      } catch(e) {}
+
+      // 上传
+      var body = {
+        message: 'sync: '+today(),
+        content: btoa(unescape(encodeURIComponent(encrypted))),
+        branch: 'main'
+      };
+      if(sha) body.sha = sha;
+
+      var resp = await fetch('https://api.github.com/repos/'+repo+'/contents/backup/sync.apbak', {
+        method: 'PUT',
+        headers: { 'Authorization': 'token '+token, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      if(resp.ok) {
+        this.setLastSync();
+        document.getElementById('sync-status').textContent = '上次同步: '+formatDate(today());
+        App.toast('同步上传成功！☁','success');
+      } else {
+        var err = await resp.json();
+        App.toast('上传失败: '+(err.message||resp.status),'error');
+      }
+    } catch(e) {
+      App.toast('上传失败: '+e.message,'error');
+    }
+  },
+
+  // 从 GitHub 下载
+  async download() {
+    var token = document.getElementById('sync-token') ? document.getElementById('sync-token').value : this.getToken();
+    var repo = document.getElementById('sync-repo') ? document.getElementById('sync-repo').value : this.getRepo();
+    if(!token) { App.toast('请先设置 GitHub Token','error'); return; }
+    if(token !== this.getToken()) this.saveConfig({token: token});
+    if(repo !== this.getRepo()) this.saveConfig({repo: repo});
+
+    App.toast('正在从云端下载...','info');
+    try {
+      var resp = await fetch('https://api.github.com/repos/'+repo+'/contents/backup/sync.apbak', {
+        headers: { 'Authorization': 'token '+token, 'Accept': 'application/vnd.github+json' }
+      });
+
+      if(!resp.ok) {
+        if(resp.status === 404) { App.toast('云端暂无备份，请先上传','info'); }
+        else { var err = await resp.json(); App.toast('下载失败: '+(err.message||resp.status),'error'); }
+        return;
+      }
+
+      var info = await resp.json();
+      var encrypted = decodeURIComponent(escape(atob(info.content)));
+      var syncPw = Store.settings().passwordHash || 'anime-planner-default';
+
+      // 尝试解密
+      var decrypted = await aesDecrypt(encrypted, syncPw);
+      if(!decrypted) {
+        App.toast('解密失败，密码不匹配','error');
+        return;
+      }
+
+      var data = JSON.parse(decrypted);
+      if(!data.version || !data.plans) {
+        App.toast('云端数据格式无效','error');
+        return;
+      }
+
+      // 合并模式导入（保留本地独有数据）
+      if(data.plans) {
+        var existingPlans = Store.get('plans')||[];
+        var existingIds = new Set(existingPlans.map(function(p){return p.id;}));
+        data.plans.forEach(function(p){ if(!existingIds.has(p.id)) existingPlans.push(p); });
+        Store.set('plans', existingPlans);
+      }
+      if(data.tasks) {
+        var existingTasks = Store.get('tasks')||[];
+        var existingTIds = new Set(existingTasks.map(function(t){return t.id;}));
+        data.tasks.forEach(function(t){ if(!existingTIds.has(t.id)) existingTasks.push(t); });
+        Store.set('tasks', existingTasks);
+      }
+      if(data.tags) {
+        var existingTags = Store.tags();
+        data.tags.forEach(function(t){ if(existingTags.indexOf(t)===-1) existingTags.push(t); });
+        Store.set('tags', existingTags);
+      }
+      if(data.categories) {
+        var existingCats = Store.categories();
+        var existingCIds = new Set(existingCats.map(function(c){return c.id;}));
+        data.categories.forEach(function(c){ if(!existingCIds.has(c.id)) existingCats.push(c); });
+        Store.set('categories', existingCats);
+      }
+      if(data.summaries) {
+        var existingSums = Store.get('summaries')||[];
+        var existingSIds = new Set(existingSums.map(function(s){return s.weekStart;}));
+        data.summaries.forEach(function(s){ if(!existingSIds.has(s.weekStart)) existingSums.push(s); });
+        Store.set('summaries', existingSums);
+      }
+      if(data.focus_logs) {
+        var existingLogs = Store.get('focus_logs')||[];
+        Store.set('focus_logs', existingLogs.concat(data.focus_logs));
+      }
+
+      this.setLastSync();
+      document.getElementById('sync-status').textContent = '上次同步: '+formatDate(today());
+      EventBus.emit('data-changed', {type:'sync-import'});
+      App.toast('云端数据同步成功！☁','success');
+      App.refreshCurrentView();
+      App.renderCategories();
+    } catch(e) {
+      App.toast('下载失败: '+e.message,'error');
+    }
+  },
+
+  // 自动同步初始化
+  init() {
+    if(this.isAutoSync()) {
+      // 启动时自动拉取
+      setTimeout(function(){ CloudSync.download(); }, 2000);
+      // 每30分钟自动拉取
+      setInterval(function(){ CloudSync.download(); }, 1800000);
+    }
+  }
 };
 
 // ============================================================
