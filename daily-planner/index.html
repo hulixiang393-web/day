@@ -3185,13 +3185,38 @@ const ClipboardSync = {
     var pw = pwEl ? pwEl.value : this.getPassword();
     if(!pw || pw.length < 6) { App.toast("请先在上方设置传输密码（至少6位）","error"); return; }
     this.savePassword(pw);
+
+    // 检查 BarcodeDetector API
+    if(typeof BarcodeDetector === "undefined") {
+      // 回退到手动粘贴
+      this._showManualPaste(pw);
+      return;
+    }
+
+    // 显示摄像头扫描界面
     var content = "<div style=\"text-align:center\">"+
-      "<p style=\"margin-bottom:12px;color:var(--text-secondary)\">请使用以下任一方式导入：</p>"+
-      "<textarea class=\"input\" id=\"qr-manual-input\" rows=\"4\" placeholder=\"📋 在此粘贴从另一设备复制的加密数据...\" style=\"margin:8px 0;font-size:0.8rem\"></textarea>"+
+      "<p style=\"margin-bottom:8px;font-size:0.85rem\">将二维码对准摄像头</p>"+
+      "<video id=\"qr-video\" style=\"width:100%;max-width:300px;border-radius:12px;background:#000\" autoplay playsinline></video>"+
+      "<canvas id=\"qr-canvas\" style=\"display:none\"></canvas>"+
+      "<p id=\"qr-status\" style=\"font-size:0.8rem;color:var(--text-secondary);margin-top:8px\">正在启动摄像头...</p>"+
       "</div>";
+    var footer = "<button class=\"btn btn-secondary\" onclick=\"ClipboardSync._stopScan()\">取消</button>"+
+      "<button class=\"btn btn-secondary btn-sm\" onclick=\"ClipboardSync._showManualPaste()\">📋 手动粘贴</button>";
+    Modal.show(content, {title:"📷 扫描二维码", footer, narrow:true});
+
+    this._startScan(pw);
+  },
+
+  _showManualPaste(pw) {
+    if(!pw) {
+      var pwEl = document.getElementById("sync-password");
+      pw = pwEl ? pwEl.value : this.getPassword();
+    }
+    var content = "<p style=\"font-size:0.85rem;color:var(--text-secondary);margin-bottom:12px\">请粘贴从另一设备复制的加密数据</p>"+
+      "<textarea class=\"input\" id=\"qr-manual-input\" rows=\"5\" placeholder=\"在此粘贴加密数据...\" style=\"font-size:0.75rem\"></textarea>";
     var footer = "<button class=\"btn btn-secondary\" onclick=\"Modal.close()\">取消</button>"+
       "<button class=\"btn btn-primary\" onclick=\"ClipboardSync._manualQRInput()\">导入数据</button>";
-    Modal.show(content, {title:"📥 接收数据", footer, narrow:true});
+    Modal.show(content, {title:"📥 手动粘贴", footer, narrow:true});
   },
 
   _manualQRInput() {
@@ -3201,6 +3226,56 @@ const ClipboardSync = {
     var pw = pwEl ? pwEl.value : this.getPassword();
     Modal.close();
     this._decryptAndImport(encrypted, pw);
+  },
+
+  _scanStream: null,
+  _scanTimer: null,
+  _scanned: false,
+
+  async _startScan(pw) {
+    this._scanned = false;
+    try {
+      this._scanStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:640},height:{ideal:480}}});
+      var video = document.getElementById("qr-video");
+      if(!video) return;
+      video.srcObject = this._scanStream;
+      video.onloadedmetadata = function() { video.play(); };
+      document.getElementById("qr-status").textContent = "正在识别二维码...";
+
+      var detector = new BarcodeDetector({formats:["qr_code"]});
+      var canvas = document.getElementById("qr-canvas");
+      var ctx = canvas.getContext("2d");
+      var self = this;
+
+      this._scanTimer = setInterval(async function() {
+        if(self._scanned) return;
+        if(video.readyState < 2) return;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+
+        try {
+          var barcodes = await detector.detect(canvas);
+          if(barcodes.length > 0 && !self._scanned) {
+            self._scanned = true;
+            var encrypted = barcodes[0].rawValue;
+            self._stopScan();
+            Modal.close();
+            document.getElementById("qr-status").textContent = "✅ 识别成功！";
+            await self._decryptAndImport(encrypted, pw);
+          }
+        } catch(e) {}
+      }, 200);
+    } catch(e) {
+      document.getElementById("qr-status").textContent = "摄像头不可用，请使用手动粘贴";
+      this._scanStream = null;
+    }
+  },
+
+  _stopScan() {
+    this._scanned = true;
+    if(this._scanTimer) { clearInterval(this._scanTimer); this._scanTimer = null; }
+    if(this._scanStream) { this._scanStream.getTracks().forEach(function(t){t.stop();}); this._scanStream = null; }
   }
 };
 
