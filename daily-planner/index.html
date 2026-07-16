@@ -2417,43 +2417,50 @@ const DayViewDrag = {
     const task = Store.taskById(taskId);
     if(!task) return;
 
+    var origH2 = task.startHour ? parseInt(task.startHour.split(':')[0]) : 9;
+    var origM2 = task.startHour ? parseInt(task.startHour.split(':')[1]) : 0;
+    var origAbsMin = origH2 * 60 + origM2;
     this._dragging = {
-      taskId, type: 'move',
+      taskId: taskId, type: 'move',
       startY: e.clientY,
       origTop: parseInt(block.style.top),
+      origAbsMin: origAbsMin,
       origHeight: parseInt(block.style.height),
       origStartHour: task.startHour,
       origDuration: task.duration,
-      block,
+      block: block,
     };
     block.classList.add('dragging');
 
-    const onMove = function(ev) {
+    var onMove = function(ev) {
       if(!DayViewDrag._dragging || DayViewDrag._dragging.type !== 'move') return;
-      const dy = ev.clientY - DayViewDrag._dragging.startY;
-      const snapped = Math.round(dy / (60/60*DayViewDrag._snapMinutes)) * (60/60*DayViewDrag._snapMinutes);
-      let newTop = DayViewDrag._dragging.origTop + snapped;
-      newTop = Math.max(0, Math.min(23*60, newTop));
-      DayViewDrag._dragging.block.style.top = newTop + 'px';
+      var dy2 = ev.clientY - DayViewDrag._dragging.startY;
+      var snapped2 = Math.round(dy2 / DayViewDrag._snapMinutes) * DayViewDrag._snapMinutes;
+      var newTop2 = DayViewDrag._dragging.origAbsMin + snapped2;
+      newTop2 = Math.max(0, Math.min(23*60+59, newTop2));
+      DayViewDrag._dragging.block.style.top = newTop2 + 'px';
     };
 
-    const onUp = function() {
+    var onUp = function() {
       if(!DayViewDrag._dragging || DayViewDrag._dragging.type !== 'move') return;
-      const block = DayViewDrag._dragging.block;
-      block.classList.remove('dragging');
-      const currentTop = parseInt(block.style.top) || DayViewDrag._dragging.origTop;
-      const dy = currentTop - DayViewDrag._dragging.origTop;
-      const snapped = Math.round(dy / (60/60*DayViewDrag._snapMinutes)) * (60/60*DayViewDrag._snapMinutes);
-      if(Math.abs(snapped) >= DayViewDrag._snapMinutes/60*60) {
-        const totalMinutes = Math.round((DayViewDrag._dragging.origTop + snapped) / (60/60));
-        const h = Math.floor(totalMinutes / 60);
-        const m = totalMinutes % 60;
-        const newStartHour = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
-        const task_ = Store.taskById(DayViewDrag._dragging.taskId);
+      var block2 = DayViewDrag._dragging.block;
+      block2.classList.remove('dragging');
+      var curTop = parseInt(block2.style.top) || 0;
+      var delta = curTop - DayViewDrag._dragging.origAbsMin;
+      var snapped3 = Math.round(delta / DayViewDrag._snapMinutes) * DayViewDrag._snapMinutes;
+      if(Math.abs(snapped3) >= DayViewDrag._snapMinutes) {
+        var newAbs = DayViewDrag._dragging.origAbsMin + snapped3;
+        var clamped = Math.max(0, Math.min(23*60+59, newAbs));
+        var h3 = Math.floor(clamped / 60);
+        var m3 = clamped % 60;
+        m3 = Math.round(m3 / DayViewDrag._snapMinutes) * DayViewDrag._snapMinutes;
+        if(m3 >= 60) { h3 = Math.min(23, h3+1); m3 = m3-60; }
+        var ns = String(h3).padStart(2,'0') + ':' + String(m3).padStart(2,'0');
+        var task_ = Store.taskById(DayViewDrag._dragging.taskId);
         if(task_) {
-          task_.startHour = newStartHour;
+          task_.startHour = ns;
           Store.saveTask(task_);
-          App.toast('任务移至 '+newStartHour,'info');
+          App.toast('任务移至 '+ns,'info');
         }
       }
       DayViewDrag._dragging = null;
