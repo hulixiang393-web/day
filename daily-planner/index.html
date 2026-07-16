@@ -738,6 +738,12 @@ const Store = {
   removeTag(tag) { const t=this.tags().filter(x=>x!==tag); this.set('tags',t); },
   settings() { return this.get('settings')||{}; },
   saveSettings(s) { this.set('settings', {...this.settings(),...s}); EventBus.emit('settings-changed', s); },
+  clearAll() {
+    var keep = this.get('settings'); // 保留设置
+    ['categories','plans','tasks','tags','recycle','summaries','focus_logs'].forEach(function(k){ Store.remove(k); });
+    this.initDefaults(); // 重建默认分类和标签
+    if(keep) this.set('settings', keep); // 恢复设置
+  },
 };
 
 // ============================================================
@@ -1547,6 +1553,15 @@ const App = {
     App.toast('回收站已清空','info');
   },
 
+  clearAllData() {
+    if(!confirm('⚠ 确定要清空所有数据吗？\n\n这将删除所有计划、任务、分类、标签、回收站、周总结、专注记录！\n\n此操作不可恢复！')) return;
+    if(!confirm('再次确认：真的要清空所有数据吗？')) return;
+    Store.clearAll();
+    App.toast('所有数据已清空','info');
+    App.refreshCurrentView();
+    App.renderCategories();
+  },
+
   // ========== 分类管理 ==========
   showCategoryForm(catId) {
     const cat = catId ? Store.categories().find(c=>c.id===catId) : null;
@@ -1788,6 +1803,7 @@ const App = {
           <button class="btn btn-secondary btn-sm" onclick="Modal.close();Backup.exportData()">📤 导出备份</button>
           <button class="btn btn-secondary btn-sm" onclick="Modal.close();Backup.importData()">📥 导入恢复</button>
           <button class="btn btn-danger btn-sm" onclick="Modal.close();App.showRecycleBin()">🗑 回收站</button>
+          <button class="btn btn-danger btn-sm" onclick="App.clearAllData()" style="margin-top:4px">⚠ 清空所有数据</button>
         </div>
       </div>
       <div class="settings-section">
