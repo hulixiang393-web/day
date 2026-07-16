@@ -9,7 +9,7 @@ import { showToast } from './core/toast.js';
 import { openModal } from './core/modal.js';
 import { initKeyboard, registerShortcut } from './utils/keyboard.js';
 import { initMascot } from './components/mascot.js';
-import { hasPassword, hasQuestion, getQuestion, verifyPassword, verifyAnswer, setPassword, setQuestion, hasValidSession, createSession, clearSession, isLocked, lockSeconds, recordPwdAttempt, remainingPwd, resetPwdAttempts, isAnsLocked, ansLockSeconds, recordAnsAttempt, remainingAns, resetAnsAttempts } from './core/auth.js';
+import { hasPassword, hasQuestion, getQuestion, verifyPassword, verifyAnswer, setPassword, setQuestion, tryMigrateHash, hasValidSession, createSession, clearSession, isLocked, lockSeconds, recordPwdAttempt, remainingPwd, resetPwdAttempts, isAnsLocked, ansLockSeconds, recordAnsAttempt, remainingAns, resetAnsAttempts } from './core/auth.js';
 import { TaskModel } from './data/models/task.js';
 import { TaskForm } from './components/taskForm.js';
 import { ListView } from './views/listView.js';
@@ -174,10 +174,20 @@ function renderUnlock() {
   return new Promise(resolve => {
     btn().onclick = async () => {
       if (isLocked()) return;
-      const ok = await verifyPassword(val('af-pwd'));
+      let ok = await verifyPassword(val('af-pwd'));
+      // 兼容旧版密码（自动升级哈希）
+      if (!ok) ok = await tryMigrateHash(val('af-pwd'));
       if (ok) {
         resetPwdAttempts();
         createSession();
+        // 有密码但没安全问题 → 提示补充设置
+        if (!hasQuestion()) {
+          renderAddQuestion().then(() => {
+            document.getElementById('auth-overlay').classList.add('hidden');
+            resolve(true);
+          });
+          return;
+        }
         document.getElementById('auth-overlay').classList.add('hidden');
         resolve(true);
         return;
@@ -200,7 +210,18 @@ function renderUnlock() {
 
 // ====== 步骤3：重置密码（先验证安全问题，再设新密码） ======
 function renderReset(resolve) {
-  if (!hasQuestion()) { err('未设置安全问题，无法重置。请联系管理员。'); return; }
+  if (!hasQuestion()) {
+    // 没有安全问题：显示返回登录提示
+    clearForm();
+    use('reset-nq');
+    header('🔄 无法重置', '');
+    form(`<p class="text-sm text-secondary mb-3">你的账号没有设置安全问题，无法通过此方式重置密码。</p>
+          <p class="text-sm text-secondary mb-3">请返回登录页，用密码进入后再设置安全问题。</p>`);
+    bottom(`<button id="af-back" class="btn btn-primary btn-full">← 返回登录</button>`);
+    hideErr();
+    click('af-back', () => renderUnlock().then(resolve));
+    return;
+  }
 
   clearForm();
   const r = use('reset');
@@ -260,6 +281,33 @@ function renderReset(resolve) {
   keynav(['af-answer'], 'af-btn');
   click('af-back', () => renderUnlock().then(resolve));
   focus('af-answer');
+}
+
+// ====== 补设安全问题（登录后发现没有） ======
+function renderAddQuestion() {
+  clearForm();
+  use('addq');
+  header('🔐 补充安全设置', '为了能找回密码，请设置安全问题');
+  form(`
+    <input id="af-question" class="auth-input" placeholder="安全问题，如：我的小学叫什么？" maxlength="60" style="letter-spacing:0">
+    <input id="af-answer" class="auth-input mt-2" placeholder="答案" maxlength="40" style="letter-spacing:0">
+    <button id="af-btn" class="btn btn-primary btn-full mt-2">✅ 完成</button>
+  `);
+  bottom(`<button id="af-skip" class="btn btn-text text-sm">跳过，以后再说</button>`);
+  hideErr();
+
+  return new Promise(resolve => {
+    btn().onclick = async () => {
+      const q = val('af-question'), a = val('af-answer');
+      if (!q) return err('请输入安全问题');
+      if (!a) return err('请输入答案');
+      await setQuestion(q, a);
+      resolve(true);
+    };
+    el('af-skip').onclick = () => resolve(true);
+    keynav(['af-question', 'af-answer'], 'af-btn');
+    focus('af-question');
+  });
 }
 
 // ====== UI 辅助函数 ======

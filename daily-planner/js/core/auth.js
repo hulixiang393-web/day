@@ -103,10 +103,30 @@ export function resetAnsAttempts() { localStorage.removeItem(AT_ANS); localStora
 
 // ====== 工具 ======
 
+const SALT = 'anime-planner';
+
 async function hash(p) {
-  const d = new TextEncoder().encode(p + ':anime-planner-v2:');
+  const d = new TextEncoder().encode(p + ':' + SALT + ':');
   const h = await crypto.subtle.digest('SHA-256', d);
   return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** 检查是否旧版哈希（无盐）并自动升级 */
+export async function tryMigrateHash(password) {
+  const stored = localStorage.getItem(PWD);
+  if (!stored) return false;
+  // 尝试旧版哈希
+  const oldHash = await (async () => {
+    const d = new TextEncoder().encode(password + SALT);
+    const h = await crypto.subtle.digest('SHA-256', d);
+    return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, '0')).join('');
+  })();
+  if (oldHash === stored) {
+    // 升级到新格式
+    localStorage.setItem(PWD, await hash(password));
+    return true;
+  }
+  return false;
 }
 
 /** 时间恒定比较（防时序攻击） */
