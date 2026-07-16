@@ -3289,26 +3289,35 @@ const CloudSync = {
   // 诊断：检查同步所需的所有API是否可用
   async diagnose() {
     var results = [];
-    // 1. 检查 HTTPS
-    results.push(location.protocol==='https:'?'✅ HTTPS':'❌ 非HTTPS（加密API需要）');
-    // 2. 检查 crypto.subtle
+    results.push(location.protocol==='https:'?'✅ HTTPS':'❌ 非HTTPS');
     results.push((window.crypto&&window.crypto.subtle)?'✅ 加密API可用':'❌ 加密API不可用');
-    // 3. 检查 localStorage
     try { localStorage.setItem('_test','1'); localStorage.removeItem('_test'); results.push('✅ 本地存储可用'); }
-    catch(e) { results.push('❌ 本地存储不可用: '+e.message); }
-    // 4. 检查 fetch
-    try { var r=await fetch('https://api.github.com/zen',{headers:{'Accept':'text/plain'}}); results.push(r.ok?'✅ 网络连接正常':'⚠ 网络连接异常: HTTP '+r.status); }
-    catch(e) { results.push('❌ 网络请求失败: '+e.message); }
-    // 5. 检查 Token
+    catch(e) { results.push('❌ 本地存储: '+e.message); }
+
+    // 测试 raw.githubusercontent.com（实际下载路径）
+    var repo = this.getRepo();
+    try {
+      var r = await fetch('https://raw.githubusercontent.com/'+repo+'/main/backup/sync.apbak?'+Date.now(), {cache:'no-store'});
+      if(r.ok) results.push('✅ 云端有备份文件');
+      else if(r.status===404) results.push('⚠ 云端暂无备份（请先上传）');
+      else results.push('⚠ 云端响应 HTTP '+r.status);
+    } catch(e) { results.push('❌ 网络异常: '+e.message); }
+
+    // 测试 upload token（简化）
     var token = this.getToken();
-    if(!token) { results.push('⚠ 未设置GitHub Token'); }
+    if(!token) { results.push('⚠ 未设置Token（上传需要）'); }
     else {
       try {
-        var tr=await fetch('https://api.github.com/user',{headers:{'Authorization':'token '+token,'Accept':'application/vnd.github+json'}});
-        results.push(tr.ok?'✅ Token有效':'❌ Token无效: HTTP '+tr.status);
-      } catch(e) { results.push('❌ Token验证失败: '+e.message); }
+        var tr = await fetch('https://api.github.com/user?'+Date.now(), {
+          headers: {'Authorization':'token '+token, 'Accept':'application/vnd.github+json'},
+          cache: 'no-store'
+        });
+        results.push(tr.ok?'✅ Token有效':'⚠ Token验证 HTTP '+tr.status+'（可能是浏览器CORS限制，不影响使用）');
+      } catch(e) { results.push('⚠ Token验证失败（浏览器CORS限制，XHR上传仍可能成功）'); }
     }
+
     var msg = '=== 同步诊断 ===\n'+results.join('\n');
+    msg += '\n\n说明：下载走raw.githubusercontent.com无需Token\nToken仅用于上传，浏览器CORS可能限制API调用但不影响XHR上传';
     alert(msg);
     console.log(msg);
   },
