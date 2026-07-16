@@ -756,9 +756,29 @@ const EventBus = {
 const PG = {
   _state: { attempts: 0, lockUntil: null, resetMode: false },
 
+  // 检查登录会话（7天有效）
+  _checkSession() {
+    try {
+      var session = JSON.parse(localStorage.getItem('dp_session'));
+      if(session && session.validUntil && Date.now() < session.validUntil) {
+        return true; // 会话有效，免输入密码
+      }
+    } catch(e) {}
+    return false;
+  },
+  // 保存登录会话
+  _saveSession() {
+    localStorage.setItem('dp_session', JSON.stringify({
+      validUntil: Date.now() + 7*86400000  // 7天后过期
+    }));
+  },
+  // 清除登录会话
+  _clearSession() {
+    localStorage.removeItem('dp_session');
+  },
+
   init() {
     const s = Store.settings();
-    // 从localStorage加载锁定状态
     const lockData = localStorage.getItem('dp_lockout');
     if(lockData) {
       const ld = JSON.parse(lockData);
@@ -768,6 +788,11 @@ const PG = {
       }
     }
     if(s.passwordHash) {
+      // 检查是否在免输入有效期内
+      if(this._checkSession()) {
+        this.unlockApp();
+        return;
+      }
       this.showVerifyForm();
       this.startLockoutCheck();
     } else {
@@ -859,7 +884,8 @@ const PG = {
     this._state.attempts = 0;
     this._state.lockUntil = null;
     localStorage.removeItem('dp_lockout');
-    App.toast('密码设置成功！下次访问需要验证', 'success');
+    this._saveSession();
+    App.toast('密码设置成功！7天内无需重复输入', 'success');
     this.unlockApp();
   },
 
@@ -889,6 +915,7 @@ const PG = {
       localStorage.removeItem('dp_lockout');
       document.getElementById('verify-error').textContent = '';
       document.getElementById('verify-pw').value = '';
+      this._saveSession();  // 7天免输入
       this.unlockApp();
       App.toast('欢迎回来~ ✨', 'success');
     } else {
@@ -1013,6 +1040,7 @@ const PG = {
 
   // 主动锁定
   lock() {
+    this._clearSession();  // 手动锁定后需要重新输入密码
     document.getElementById('privacy-overlay').classList.remove('hidden');
     document.getElementById('app-container').classList.remove('visible');
     this.showVerifyForm();
@@ -3180,43 +3208,70 @@ const ClipboardSync = {
     Modal.show(content, {title:"📱 二维码传输", narrow:true});
   },
 
+  // 拍照扫码（全浏览器兼容：通过文件上传 + qrserver API 解码）
   async scanQRCode() {
     var pwEl = document.getElementById("sync-password");
     var pw = pwEl ? pwEl.value : this.getPassword();
     if(!pw || pw.length < 6) { App.toast("请先在上方设置传输密码（至少6位）","error"); return; }
     this.savePassword(pw);
 
-    // 检查 BarcodeDetector API
-    if(typeof BarcodeDetector === "undefined") {
-      // 回退到手动粘贴
-      this._showManualPaste(pw);
-      return;
-    }
-
-    // 显示摄像头扫描界面
     var content = "<div style=\"text-align:center\">"+
-      "<p style=\"margin-bottom:8px;font-size:0.85rem\">将二维码对准摄像头</p>"+
-      "<video id=\"qr-video\" style=\"width:100%;max-width:300px;border-radius:12px;background:#000\" autoplay playsinline></video>"+
-      "<canvas id=\"qr-canvas\" style=\"display:none\"></canvas>"+
-      "<p id=\"qr-status\" style=\"font-size:0.8rem;color:var(--text-secondary);margin-top:8px\">正在启动摄像头...</p>"+
+      "<p style=\"margin-bottom:12px;font-size:0.9rem\">📷 拍摄或选择二维码图片</p>"+
+      "<input type=\"file\" id=\"qr-file-input\" accept=\"image/*\" capture=\"environment\" style=\"display:block;margin:0 auto 12px;font-size:0.9rem\">"+
+      "<p style=\"font-size:0.75rem;color:var(--text-muted)\">手机端会自动打开后置摄像头</p>"+
+      "<p id=\"qr-decode-status\" style=\"font-size:0.8rem;color:var(--text-secondary);margin-top:8px\"></p>"+
+      "<div style=\"margin-top:16px;padding-top:12px;border-top:1px solid var(--border-light)\">"+
+      "<p style=\"font-size:0.75rem;color:var(--text-muted);margin-bottom:6px\">或者手动粘贴：</p>"+
+      "<textarea class=\"input\" id=\"qr-manual-input\" rows=\"3\" placeholder=\"在此粘贴加密数据...\" style=\"font-size:0.75rem\"></textarea>"+
+      "</div>"+
       "</div>";
-    var footer = "<button class=\"btn btn-secondary\" onclick=\"ClipboardSync._stopScan()\">取消</button>"+
-      "<button class=\"btn btn-secondary btn-sm\" onclick=\"ClipboardSync._showManualPaste()\">📋 手动粘贴</button>";
-    Modal.show(content, {title:"📷 扫描二维码", footer, narrow:true});
+    var footer = "<button class=\"btn btn-secondary\" onclick=\"Modal.close()\">取消</button>"+
+      "<button class=\"btn btn-primary\" onclick=\"ClipboardSync._manualQRInput()\">粘贴导入</button>";
+    Modal.show(content, {title:"📷 扫码接收", footer, narrow:true});
 
-    this._startScan(pw);
+    // 绑定文件选择事件
+    var self = this;
+    setTimeout(function() {
+      var fileInput = document.getElementById("qr-file-input");
+      if(fileInput) {
+        fileInput.addEventListener("change", function() {
+          self._decodeQRFile(this.files[0], pw);
+        });
+      }
+    }, 100);
   },
 
-  _showManualPaste(pw) {
-    if(!pw) {
-      var pwEl = document.getElementById("sync-password");
-      pw = pwEl ? pwEl.value : this.getPassword();
-    }
-    var content = "<p style=\"font-size:0.85rem;color:var(--text-secondary);margin-bottom:12px\">请粘贴从另一设备复制的加密数据</p>"+
-      "<textarea class=\"input\" id=\"qr-manual-input\" rows=\"5\" placeholder=\"在此粘贴加密数据...\" style=\"font-size:0.75rem\"></textarea>";
-    var footer = "<button class=\"btn btn-secondary\" onclick=\"Modal.close()\">取消</button>"+
-      "<button class=\"btn btn-primary\" onclick=\"ClipboardSync._manualQRInput()\">导入数据</button>";
-    Modal.show(content, {title:"📥 手动粘贴", footer, narrow:true});
+  _decodeQRFile(file, pw) {
+    if(!file) return;
+    var statusEl = document.getElementById("qr-decode-status");
+    if(statusEl) statusEl.textContent = "正在解码...";
+    var self = this;
+
+    var formData = new FormData();
+    formData.append("file", file);
+
+    fetch("https://api.qrserver.com/v1/read-qr-code/", {
+      method: "POST",
+      body: formData
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(result) {
+      if(result && result[0] && result[0].symbol && result[0].symbol[0]) {
+        var encrypted = result[0].symbol[0].data;
+        if(!encrypted) {
+          if(statusEl) statusEl.textContent = "未识别到二维码，请重试";
+          return;
+        }
+        if(statusEl) statusEl.textContent = "✅ 识别成功！正在导入...";
+        Modal.close();
+        self._decryptAndImport(encrypted, pw);
+      } else {
+        if(statusEl) statusEl.textContent = "❌ 未检测到二维码，请确保图片清晰";
+      }
+    })
+    .catch(function(e) {
+      if(statusEl) statusEl.textContent = "❌ 解码失败: " + e.message;
+    });
   },
 
   _manualQRInput() {
@@ -3226,56 +3281,6 @@ const ClipboardSync = {
     var pw = pwEl ? pwEl.value : this.getPassword();
     Modal.close();
     this._decryptAndImport(encrypted, pw);
-  },
-
-  _scanStream: null,
-  _scanTimer: null,
-  _scanned: false,
-
-  async _startScan(pw) {
-    this._scanned = false;
-    try {
-      this._scanStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:640},height:{ideal:480}}});
-      var video = document.getElementById("qr-video");
-      if(!video) return;
-      video.srcObject = this._scanStream;
-      video.onloadedmetadata = function() { video.play(); };
-      document.getElementById("qr-status").textContent = "正在识别二维码...";
-
-      var detector = new BarcodeDetector({formats:["qr_code"]});
-      var canvas = document.getElementById("qr-canvas");
-      var ctx = canvas.getContext("2d");
-      var self = this;
-
-      this._scanTimer = setInterval(async function() {
-        if(self._scanned) return;
-        if(video.readyState < 2) return;
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0);
-
-        try {
-          var barcodes = await detector.detect(canvas);
-          if(barcodes.length > 0 && !self._scanned) {
-            self._scanned = true;
-            var encrypted = barcodes[0].rawValue;
-            self._stopScan();
-            Modal.close();
-            document.getElementById("qr-status").textContent = "✅ 识别成功！";
-            await self._decryptAndImport(encrypted, pw);
-          }
-        } catch(e) {}
-      }, 200);
-    } catch(e) {
-      document.getElementById("qr-status").textContent = "摄像头不可用，请使用手动粘贴";
-      this._scanStream = null;
-    }
-  },
-
-  _stopScan() {
-    this._scanned = true;
-    if(this._scanTimer) { clearInterval(this._scanTimer); this._scanTimer = null; }
-    if(this._scanStream) { this._scanStream.getTracks().forEach(function(t){t.stop();}); this._scanStream = null; }
   }
 };
 
