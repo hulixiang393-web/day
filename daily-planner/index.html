@@ -633,30 +633,30 @@ const Store = {
   },
   deletePlan(id) {
     const ps = this.get('plans')||[];
-    const plan = ps.find(p=>p.id===id);
+    const plan = ps.find(function(p){return p.id===id;});
     if(!plan) return;
     const planCopy = JSON.parse(JSON.stringify(plan));
     const tasks = (this.get('tasks')||[]).filter(function(t){return t.planId===id;});
     const tasksCopy = JSON.parse(JSON.stringify(tasks));
+    // 立即移入回收站（避免刷新丢失）
+    const bin = this.get('recycle')||[];
+    const planBinId = UUID();
+    bin.push({type:'plan', data:planCopy, deletedAt:now(), id:planBinId});
+    const taskBinIds = [];
+    tasksCopy.forEach(function(t){ var tid=UUID(); taskBinIds.push(tid); bin.push({type:'task', data:t, deletedAt:now(), id:tid}); });
+    this.set('recycle', bin);
+    // 从活跃列表移除
     this.set('plans', ps.filter(function(p){return p.id!==id;}));
     this.set('tasks', (this.get('tasks')||[]).filter(function(t){return t.planId!==id;}));
     EventBus.emit('data-changed', {type:'plan-deleted', id: id});
     App.toast('已删除计划「'+plan.title+'」', 'info', {
       undoLabel: '撤销', duration: 4000,
       onUndo: function() {
-        var curPlans = Store.get('plans')||[];
-        curPlans.push(planCopy); Store.set('plans', curPlans);
-        var curTasks = Store.get('tasks')||[];
-        Store.set('tasks', curTasks.concat(tasksCopy));
-        EventBus.emit('data-changed', {type:'restore'});
+        Store.restoreFromBin(planBinId);
+        taskBinIds.forEach(function(tid){ Store.restoreFromBin(tid); });
         App.toast('已恢复','success');
       },
-      onTimeout: function() {
-        var bin = Store.get('recycle')||[];
-        bin.push({type:'plan', data:planCopy, deletedAt:now(), id:UUID()});
-        tasksCopy.forEach(function(t){ bin.push({type:'task', data:t, deletedAt:now(), id:UUID()}); });
-        Store.set('recycle', bin);
-      }
+      onTimeout: function() { /* 已在回收站中，无需额外操作 */ }
     });
   },
 
@@ -688,23 +688,22 @@ const Store = {
     const task = ts.find(function(t){return t.id===id;});
     if(!task) return;
     const taskCopy = JSON.parse(JSON.stringify(task));
+    // 立即移入回收站（避免刷新丢失）
+    const bin = this.get('recycle')||[];
+    const taskBinId = UUID();
+    bin.push({type:'task', data:taskCopy, deletedAt:now(), id:taskBinId});
+    this.set('recycle', bin);
+    // 从活跃列表移除
     this.set('tasks', ts.filter(function(t){return t.id!==id;}));
     EventBus.emit('data-changed', {type:'task-deleted', id: id, planId: task.planId});
-    // 删除任务后检查计划是否需要自动完成
     if(taskCopy.planId) App.checkPlanCompletion(taskCopy.planId);
     App.toast('已删除任务「'+taskCopy.title+'」', 'info', {
       undoLabel: '撤销', duration: 4000,
       onUndo: function() {
-        var curTasks = Store.get('tasks')||[];
-        curTasks.push(taskCopy); Store.set('tasks', curTasks);
-        EventBus.emit('data-changed', {type:'restore'});
+        Store.restoreFromBin(taskBinId);
         App.toast('已恢复','success');
       },
-      onTimeout: function() {
-        var bin = Store.get('recycle')||[];
-        bin.push({type:'task', data:taskCopy, deletedAt:now(), id:UUID()});
-        Store.set('recycle', bin);
-      }
+      onTimeout: function() { /* 已在回收站中 */ }
     });
   },
   recycleBin() { return (this.get('recycle')||[]).sort((a,b)=>b.deletedAt>a.deletedAt?1:-1); },
@@ -1445,14 +1444,19 @@ const App = {
   // 自动检查计划完成
   checkPlanCompletion(planId) {
     const plan = Store.planById(planId);
-    if(!plan || plan.status==='done') return;
+    if(!plan) return;
     const tasks = Store.tasks({planId});
-    if(tasks.length > 0 && tasks.every(t=>t.status==='done')) {
+    const allDone = tasks.length > 0 && tasks.every(function(t){return t.status==='done';});
+    if(allDone && plan.status !== 'done') {
       plan.status = 'done';
       plan.completedAt = now();
       Store.savePlan(plan);
-      App.toast(`🎊 计划「${plan.title}」全部完成！`,'success');
+      App.toast('🎊 计划「'+plan.title+'」全部完成！','success');
       Mascot.say('plan_done');
+    } else if(!allDone && plan.status === 'done') {
+      plan.status = 'active';
+      plan.completedAt = null;
+      Store.savePlan(plan);
     }
   },
 
@@ -1630,11 +1634,11 @@ const App = {
     });
 
     if(errors.length > 0) {
-      errEl.innerHTML = errors.map(e=>`• ${e}`).join('<br>');
+      errEl.innerHTML = errors.map(function(e){return '• '+e;}).join('<br>');
     }
     if(imported > 0) {
-      App.toast(`成功导入 ${imported} 个计划`, 'success');
-      Modal.close();
+      if(errors.length === 0) Modal.close();
+      App.toast('成功导入 '+imported+' 个计划'+(errors.length>0?'，'+errors.length+' 个错误':''), errors.length>0?'error':'success');
       App.refreshCurrentView();
     }
   },
@@ -1677,12 +1681,12 @@ const App = {
     const now_ = today();
     let changed = false;
     tasks.forEach(function(t){
-      if(t.status==='pending') {
-        const plan = plans.find(function(p){return p.id===t.planId;});
-        if(plan && plan.deadline < now_) {
-          t.status = 'overdue';
-          changed = true;
-        }
+      const plan = plans.find(function(p){return p.id===t.planId;});
+      if(!plan) return;
+      if(t.status==='pending' && plan.deadline < now_) {
+        t.status = 'overdue'; changed = true;
+      } else if(t.status==='overdue' && plan.deadline >= now_) {
+        t.status = 'pending'; changed = true;
       }
     });
     if(changed) { Store.set('tasks', tasks); EventBus.emit('data-changed', {type:'tasks-overdue'}); }
@@ -2242,7 +2246,7 @@ App.showDayPlans = function(dateStr) {
     });
   }
   const footer = `<button class="btn btn-secondary btn-sm" onclick="App.switchView('day');App.renderDayView('${dateStr}');Modal.close()">在日视图中查看</button>
-    <button class="btn btn-primary btn-sm" onclick="App.showPlanForm();document.getElementById('form-plan-deadline').value='${dateStr}';Modal.close()">+ 新建计划</button>`;
+    <button class="btn btn-primary btn-sm" onclick="Modal.close();App.showPlanForm();setTimeout(function(){var el=document.getElementById('form-plan-deadline');if(el)el.value='${dateStr}';},50)">+ 新建计划</button>`;
   Modal.show(content, {title:'', footer});
 };
 
@@ -2272,43 +2276,24 @@ App.renderSummaryView = function() {
   container.innerHTML = html;
 };
 
-// 生成周总结
-App.generateWeeklySummary = function() {
-  const today_ = today();
-  const dt = new Date(today_+'T00:00:00');
-  if(dt.getDay() !== 1) return; // 仅周一生成
-
-  const lastWeekStart = addDays(today_, -7-dt.getDay());
-  const lastWeekEnd = addDays(lastWeekStart, 6);
-
-  // 检查是否已生成
-  const summaries = Store.get('summaries') || [];
-  if(summaries.some(s=>s.weekStart===lastWeekStart)) return;
-
+// 生成单周总结
+App._generateWeekSummary = function(weekStart, weekEnd) {
   const plans = Store.plans();
   const tasks = Store.tasks();
   const focusLogs = Store.get('focus_logs')||[];
 
-  const weekPlans = plans.filter(p=>p.deadline>=lastWeekStart&&p.deadline<=lastWeekEnd);
-  const weekTasks = tasks.filter(t=>{
-    const plan = plans.find(p=>p.id===t.planId);
-    return plan && plan.deadline>=lastWeekStart && plan.deadline<=lastWeekEnd;
+  const weekPlans = plans.filter(function(p){return p.deadline>=weekStart&&p.deadline<=weekEnd;});
+  const weekTasks = tasks.filter(function(t){
+    const plan = plans.find(function(p){return p.id===t.planId;});
+    return plan && plan.deadline>=weekStart && plan.deadline<=weekEnd;
   });
 
-  const plansDone = weekPlans.filter(p=>p.status==='done').length;
-  const tasksDone = weekTasks.filter(t=>t.status==='done').length;
-  const tasksOverdue = weekTasks.filter(t=>t.status==='overdue').length;
-  const totalPlans = weekPlans.length;
+  const plansDone = weekPlans.filter(function(p){return p.status==='done';}).length;
+  const tasksDone = weekTasks.filter(function(t){return t.status==='done';}).length;
+  const tasksOverdue = weekTasks.filter(function(t){return t.status==='overdue';}).length;
   const totalTasks = weekTasks.length;
+  const focusMinutes = focusLogs.filter(function(l){return l.date>=weekStart&&l.date<=weekEnd;}).reduce(function(sum,l){return sum+(l.minutes||0);}, 0);
 
-  // 专注时长
-  const focusMinutes = focusLogs.filter(l=>l.date>=lastWeekStart&&l.date<=lastWeekEnd).reduce((sum,l)=>sum+(l.minutes||0), 0);
-
-  // 标签占比
-  const tagCount = {};
-  weekPlans.forEach(p=>{(p.tags||[]).forEach(t=>{tagCount[t]=(tagCount[t]||0)+1;});});
-
-  // 点评话术
   const rate = totalTasks>0 ? tasksDone/totalTasks : 0;
   let comment = '继续加油哦~';
   if(rate >= 0.9) comment = '太厉害了！上周表现超棒，小人也为你骄傲呢！✨';
@@ -2317,19 +2302,36 @@ App.generateWeeklySummary = function() {
   else if(totalTasks===0) comment = '上周比较悠闲呢，这周要不要制定一些计划？';
   else comment = '完成率有点低，不过没关系，新的一周新的开始！🌟';
 
-  const summary = {
-    weekStart: lastWeekStart, weekEnd: lastWeekEnd,
-    plansDone, tasksDone, tasksOverdue, totalPlans, totalTasks,
-    focusMinutes, tagCount, comment,
+  return {
+    weekStart: weekStart, weekEnd: weekEnd,
+    plansDone: plansDone, tasksDone: tasksDone, tasksOverdue: tasksOverdue,
+    totalPlans: weekPlans.length, totalTasks: totalTasks,
+    focusMinutes: focusMinutes, tagCount: {}, comment: comment,
     createdAt: now(),
   };
-  summaries.push(summary);
-  Store.set('summaries', summaries);
+};
 
-  // 显示总结通知
-  setTimeout(()=>{
-    App.toast('📊 上周总结已生成，点击查看~', 'info');
-  }, 2000);
+// 生成周总结（回填最近4周）
+App.generateWeeklySummary = function() {
+  const today_ = today();
+  const dt = new Date(today_+'T00:00:00');
+  const summaries = Store.get('summaries') || [];
+  let generated = 0;
+  // 回填过去4个周一（共4周）
+  for(let w=0; w<4; w++) {
+    const monday = addDays(today_, -dt.getDay() - 7*(w+1) + 1); // 上周一、再上周一...
+    const sunday = addDays(monday, 6);
+    // 该周数据是否在7天前到昨天之间？（避免为未来周或太旧的周生成）
+    if(monday > today_) continue;
+    if(summaries.some(function(s){return s.weekStart===monday;})) continue;
+    const sum = App._generateWeekSummary(monday, sunday);
+    summaries.push(sum);
+    generated++;
+  }
+  if(generated > 0) {
+    Store.set('summaries', summaries);
+    setTimeout(function(){ App.toast('📊 已生成 '+generated+' 周总结，点击查看~', 'info'); }, 2000);
+  }
 };
 
 // ============================================================
@@ -2987,8 +2989,8 @@ const Backup = {
           }
         }
 
-        if(!data.version && !data.plans) {
-          App.toast('无效的备份文件','error');
+        if(!data.version || (!Array.isArray(data.plans) && !Array.isArray(data.tasks))) {
+          App.toast('无效的备份文件：数据格式不正确','error');
           return;
         }
 
