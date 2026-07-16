@@ -389,6 +389,12 @@ function applyWallpaper(wallpaper) {
 
 // DOM 加载完成后启动
 // 隐私验证：未通过前不会初始化应用
-document.addEventListener('DOMContentLoaded', () => {
-  PG.check(init);
-});
+(function startApp() {
+  const guard = window.PG;
+  if (!guard) { init(); return; }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => guard.check(init));
+  } else {
+    guard.check(init);
+  }
+})();

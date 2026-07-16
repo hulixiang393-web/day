@@ -502,7 +502,5 @@ const PG = (() => {
   return API;
 })();
 
-// 导出
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = PG;
-}
+// 导出到全局
+window.PG = PG;
