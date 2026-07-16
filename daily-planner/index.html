@@ -3102,17 +3102,46 @@ const ClipboardSync = {
   getPassword() { try { return JSON.parse(localStorage.getItem(this._configKey)||"{}").syncPassword || ""; } catch(e) { return ""; } },
   savePassword(pw) { localStorage.setItem(this._configKey, JSON.stringify({syncPassword: pw})); },
 
+  // 压缩文本（使用浏览器原生 gzip）
+  async _gzip(text) {
+    if(typeof CompressionStream === "undefined") return text; // 不支持则跳过
+    try {
+      var stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
+      var buf = await new Response(stream).arrayBuffer();
+      var arr = new Uint8Array(buf);
+      var b64 = "";
+      for(var i=0; i<arr.length; i++) b64 += String.fromCharCode(arr[i]);
+      return btoa(b64);
+    } catch(e) { return text; }
+  },
+
+  // 解压
+  async _gunzip(b64) {
+    if(typeof DecompressionStream === "undefined") return null;
+    try {
+      var raw = atob(b64);
+      var arr = new Uint8Array(raw.length);
+      for(var i=0; i<raw.length; i++) arr[i] = raw.charCodeAt(i);
+      var stream = new Blob([arr]).stream().pipeThrough(new DecompressionStream("gzip"));
+      return await new Response(stream).text();
+    } catch(e) { return null; }
+  },
+
   async _packAndEncrypt(pw) {
     if(!pw || pw.length < 6) { App.toast("请先设置传输密码（至少6位），两端必须一致","error"); return null; }
     if(!window.crypto || !window.crypto.subtle) { App.toast("加密API不可用，请使用HTTPS访问","error"); return null; }
     var data = {
       version: 2, exportedAt: new Date().toISOString(),
       categories: Store.get("categories"), plans: Store.get("plans"), tasks: Store.get("tasks"),
-      tags: Store.get("tags"), recycle: Store.get("recycle"),
-      summaries: Store.get("summaries"), focus_logs: Store.get("focus_logs"),
+      tags: Store.get("tags"),
     };
     try {
-      return await aesEncrypt(JSON.stringify(data), pw);
+      var json = JSON.stringify(data);
+      // gzip 压缩（减少60-80%体积）
+      var compressed = await this._gzip(json);
+      var encrypted = await aesEncrypt(compressed, pw);
+      // 标记是否压缩过
+      return "C:" + encrypted;
     } catch(e) { App.toast("加密失败: "+e.message,"error"); return null; }
   },
 
@@ -3150,9 +3179,20 @@ const ClipboardSync = {
   async _decryptAndImport(encrypted, pw) {
     App.toast("正在解密...","info");
     try {
+      // 去掉压缩标记
+      var isCompressed = false;
+      if(encrypted.substring(0,2) === "C:") { isCompressed = true; encrypted = encrypted.substring(2); }
       var decrypted = await aesDecrypt(encrypted, pw);
       if(!decrypted) { App.toast("解密失败！请确认传输密码与导出时一致","error"); return; }
-      var data = JSON.parse(decrypted);
+
+      // 尝试解压
+      var json = decrypted;
+      if(isCompressed) {
+        var decompressed = await this._gunzip(decrypted);
+        if(decompressed) json = decompressed;
+      }
+
+      var data = JSON.parse(json);
       if(!data.version || !Array.isArray(data.plans)) { App.toast("数据格式无效","error"); return; }
       var imported = 0;
       if(data.plans) {
@@ -3199,11 +3239,13 @@ const ClipboardSync = {
     App.toast("正在生成二维码...","info");
     var encrypted = await this._packAndEncrypt(pw);
     if(!encrypted) return;
-    var qrUrl = "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=" + encodeURIComponent(encrypted);
+
+    var size = encrypted.length > 800 ? "500x500" : "350x350";
+    var qrUrl = "https://api.qrserver.com/v1/create-qr-code/?size="+size+"&data=" + encodeURIComponent(encrypted);
     var content = "<div style=\"text-align:center\">"+
       "<p style=\"margin-bottom:12px\">📱 用另一设备扫描此二维码</p>"+
-      "<img src=\""+qrUrl+"\" style=\"max-width:100%;border-radius:8px\" onerror=\"this.parentElement.innerHTML='<p style=color:red>二维码加载失败，数据过大请使用剪贴板方式</p>'\">"+
-      "<p style=\"font-size:0.7rem;color:var(--text-muted);margin-top:8px\">数据经过AES加密，安全传输</p>"+
+      "<img src=\""+qrUrl+"\" style=\"max-width:100%;border-radius:8px\" onerror=\"this.parentElement.innerHTML='<p style=color:red>二维码生成失败，数据过大<br>请改用📋剪贴板方式</p>'\">"+
+      "<p style=\"font-size:0.7rem;color:var(--text-muted);margin-top:8px\">数据已gzip压缩+AES加密 ("+encrypted.length+"字符)</p>"+
       "</div>";
     Modal.show(content, {title:"📱 二维码传输", narrow:true});
   },
