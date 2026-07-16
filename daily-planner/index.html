@@ -3159,14 +3159,19 @@ const CloudSync = {
       var json = this.packData();
       var encrypted = await aesEncrypt(json, syncPw);
 
-      // 获取现有文件SHA
+      // 获取现有文件SHA（重试3次避免缓存问题）
       var sha = null;
-      try {
-        var getResp = await fetch('https://api.github.com/repos/'+repo+'/contents/backup/sync.apbak', {
-          headers: { 'Authorization': 'token '+token, 'Accept': 'application/vnd.github+json' }
-        });
-        if(getResp.ok) { var fi = await getResp.json(); sha = fi.sha; }
-      } catch(e) {}
+      for(var retry=0; retry<3; retry++) {
+        try {
+          var getResp = await fetch('https://api.github.com/repos/'+repo+'/contents/backup/sync.apbak?'+Date.now(), {
+            headers: { 'Authorization': 'token '+token, 'Accept': 'application/vnd.github+json' },
+            cache: 'no-store'
+          });
+          if(getResp.ok) { var fi = await getResp.json(); sha = fi.sha; break; }
+          if(getResp.status === 404) break; // 文件不存在，无需SHA
+        } catch(e) {}
+        if(retry < 2) await new Promise(function(r){setTimeout(r,1000);});
+      }
 
       var body = { message: 'sync: '+today(), content: encrypted, branch: 'main' };
       if(sha) body.sha = sha;
@@ -3209,7 +3214,8 @@ const CloudSync = {
 
     App.toast('正在从云端下载...','info');
     try {
-      // 使用 raw.githubusercontent.com 免认证下载（公开仓库）
+      // raw.githubusercontent.com 返回文件原始字节（即base64文本），
+      // 直接作为文本读取即可得到加密后的base64字符串
       var resp = await fetch('https://raw.githubusercontent.com/'+repo+'/main/backup/sync.apbak', {cache:'no-cache'});
 
       if(!resp.ok) {
@@ -3218,9 +3224,7 @@ const CloudSync = {
         return;
       }
 
-      // raw 返回的是文件原始内容（base64编码的加密数据）
-      var encrypted = await resp.text();
-      encrypted = encrypted.replace(/\n/g, '').replace(/\r/g, '');
+      var encrypted = (await resp.text()).trim();
 
       var decrypted = await aesDecrypt(encrypted, syncPw);
       if(!decrypted) {
