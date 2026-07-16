@@ -3184,8 +3184,8 @@ const CloudSync = {
       }
 
       var info = await resp.json();
-      // GitHub API 返回的 content 是 base64 编码
-      var encrypted = atob(info.content.replace(/\n/g, ''));
+      // GitHub API content 是 base64，aesDecrypt 内部会 atob 解码
+      var encrypted = info.content.replace(/\n/g, '');
 
       var decrypted = await aesDecrypt(encrypted, syncPw);
       if(!decrypted) {
