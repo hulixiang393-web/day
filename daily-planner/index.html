@@ -1744,9 +1744,9 @@ const App = {
       <div class="settings-section">
         <h4>☁ 云端同步（手机 ⇄ 电脑互通）</h4>
         <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px">数据经AES加密后存至GitHub，两端填入相同配置即可互通</p>
-        <div class="form-group"><label>GitHub Token</label><input type="password" class="input" id="sync-token" placeholder="ghp_xxxxxxxxxxxx" value="${CloudSync.getToken()||''}"></div>
+        <div class="form-group"><label>GitHub Token</label><input type="password" class="input" id="sync-token" placeholder="填入 ghp_ 开头的 Token" value="${CloudSync.getToken()||''}"></div>
         <div class="form-group"><label>仓库路径</label><input type="text" class="input" id="sync-repo" placeholder="用户名/仓库名" value="${CloudSync.getRepo()||'hulixiang393-web/day'}"></div>
-        <div class="form-group"><label>同步密码（两端必须一致）</label><input type="password" class="input" id="sync-password" placeholder="设置一个同步专用密码" value="${CloudSync.getSyncPassword()||''}"></div>
+        <div class="form-group"><label>同步密码（两端必须一致）</label><input type="password" class="input" id="sync-password" placeholder="默认: anime-sync-2026" value="${CloudSync.getSyncPassword()||''}"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
           <button class="btn btn-secondary btn-sm" onclick="CloudSync.upload()">📤 上传到云端</button>
           <button class="btn btn-secondary btn-sm" onclick="CloudSync.download()">📥 从云端下载</button>
@@ -3079,7 +3079,7 @@ const CloudSync = {
   },
   getToken() { return this.getConfig().token || ''; },
   getRepo() { return this.getConfig().repo || 'hulixiang393-web/day'; },
-  getSyncPassword() { return this.getConfig().syncPassword || ''; },
+  getSyncPassword() { return this.getConfig().syncPassword || 'anime-sync-2026'; },
   isAutoSync() { return this.getConfig().autoSync === true; },
   getLastSync() { return this.getConfig().lastSync || null; },
   setLastSync() { this.saveConfig({lastSync: now()}); },
