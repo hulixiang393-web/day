@@ -311,7 +311,7 @@ textarea.input{resize:vertical;min-height:80px}
 
 /* 日视图 */
 .day-timeline{position:relative;padding-left:60px}
-.day-hour{height:60px;border-bottom:1px solid var(--border-light);position:relative;display:flex;align-items:center}
+.day-hour{height:60px;border-bottom:1px solid var(--border-light);display:flex;align-items:center}
 .day-hour-label{position:absolute;left:-56px;width:48px;text-align:right;font-size:0.75rem;color:var(--text-muted);top:-8px}
 .day-task-block{position:absolute;left:6px;right:6px;background:var(--primary-light);border-radius:var(--radius-sm);padding:4px 10px;font-size:0.78rem;color:#fff;overflow:hidden;cursor:grab;transition:box-shadow var(--transition-fast);z-index:2;user-select:none;min-height:26px}
 .day-task-block:hover{filter:brightness(1.08);box-shadow:0 2px 8px rgba(0,0,0,0.15)}
@@ -2168,7 +2168,7 @@ App.renderDayView = function(date) {
         const taskH = t.startHour ? parseInt(t.startHour.split(':')[0]) : -1;
         const taskM = t.startHour ? parseInt(t.startHour.split(':')[1]) : 0;
         if(taskH === h) {
-          const top = taskM/60*60;
+          const top = taskH * 60 + taskM; // 绝对位置(距0:00的分钟数)
           const height = Math.max(30, (t.duration||30)/60*60);
           html += `<div class="day-task-block${t.status==='done'?' done':''}"
             style="top:${top}px;height:${height}px"
