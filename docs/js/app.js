@@ -109,126 +109,110 @@ async function checkAuth() {
 
   // 首次使用：设置密码
   if (!hasPwd) {
-    title.textContent = '🔐 欢迎';
-    desc.textContent = '请设置一个密码保护你的数据';
-    btn.textContent = '🔒 设置密码';
-    resetArea.style.display = 'none';
-    attemptsEl.textContent = '密码只存在你本地，不会上传到任何地方';
-    input.value = '';
-
-    return new Promise((resolve) => {
-      btn.onclick = async () => {
-        const pwd = input.value.trim();
-        if (!pwd) { showAuthError('请输入密码'); return; }
-        if (pwd.length < 4) { showAuthError('密码至少4个字符'); return; }
-        await setPassword(pwd);
-        overlay.classList.add('hidden');
-        resolve(true);
-      };
-      input.onkeydown = (e) => { if (e.key === 'Enter') btn.click(); };
-      input.focus();
-    });
+    setupSetPassword(title, desc, btn, input, error, resetArea, attemptsEl, overlay);
+    return new Promise((resolve) => { window._authResolve = resolve; });
   }
 
   // 已有密码：验证
+  setupUnlock(title, desc, btn, input, error, resetArea, attemptsEl, overlay, resetBtn);
+  return new Promise((resolve) => { window._authResolve = resolve; });
+}
+
+function setupSetPassword(title, desc, btn, input, error, resetArea, attemptsEl, overlay) {
+  title.textContent = '🔐 欢迎';
+  desc.textContent = '请设置密码保护你的数据';
+  btn.textContent = '🔒 设置密码';
+  resetArea.style.display = 'none';
+  attemptsEl.textContent = '密码只存在本地，不上传';
+  input.value = '';
+  input.disabled = false;
+  btn.disabled = false;
+  error.style.display = 'none';
+
+  btn.onclick = async () => {
+    const pwd = input.value.trim();
+    if (!pwd) { showError('请输入密码'); return; }
+    if (pwd.length < 4) { showError('密码至少4个字符'); return; }
+    await setPassword(pwd);
+    overlay.classList.add('hidden');
+    if (window._authResolve) window._authResolve(true);
+  };
+  input.onkeydown = (e) => { if (e.key === 'Enter') btn.click(); };
+  input.focus();
+}
+
+function setupUnlock(title, desc, btn, input, error, resetArea, attemptsEl, overlay, resetBtn) {
   title.textContent = '🌸 二次元计划表';
   desc.textContent = '输入密码解锁';
   btn.textContent = '🔓 进入';
   resetArea.style.display = 'block';
   updateAttemptsDisplay();
   input.value = '';
+  error.style.display = 'none';
 
-  // 检查是否被锁定
   if (isLocked()) {
     input.disabled = true;
     btn.disabled = true;
-    error.textContent = `密码错误次数过多，请等待 ${Math.ceil(lockRemaining()/60)} 分钟后再试`;
+    error.textContent = '密码错误次数过多，请等待 ' + Math.ceil(lockRemaining()/60) + ' 分钟后再试';
     error.style.display = 'block';
     setTimeout(() => {
+      clearAttempts();
       input.disabled = false;
       btn.disabled = false;
       error.style.display = 'none';
       updateAttemptsDisplay();
     }, lockRemaining() * 1000);
-    // Still allow reset
-    resetBtn.onclick = () => showResetDialog(resolve);
-    return new Promise(() => {}); // Will be resolved by reset
+  } else {
+    input.disabled = false;
+    btn.disabled = false;
   }
 
-  return new Promise((resolve) => {
-    btn.onclick = async () => {
-      const pwd = input.value.trim();
-      if (!pwd) return;
-
-      const ok = await verifyPassword(pwd);
-      if (ok) {
-        clearAttempts();
-        overlay.classList.add('hidden');
-        resolve(true);
-        return;
-      }
-
-      // 密码错误
-      const n = recordAttempt();
-      const remaining = remainingAttempts();
-      input.value = '';
-      input.focus();
-
-      if (isLocked()) {
-        error.textContent = `已锁定！请等待 ${Math.ceil(lockRemaining()/60)} 分钟后重试`;
-        error.style.display = 'block';
-        input.disabled = true;
-        btn.disabled = true;
-        setTimeout(() => { location.reload(); }, lockRemaining() * 1000);
-      } else {
-        error.textContent = `密码错误，还剩 ${remaining} 次机会`;
-        error.style.display = 'block';
-      }
-      updateAttemptsDisplay();
-    };
-
-    input.onkeydown = (e) => { if (e.key === 'Enter') btn.click(); };
-    resetBtn.onclick = () => showResetDialog(resolve);
-    input.focus();
-  });
-}
-
-function showResetDialog(resolve) {
-  const overlay = document.getElementById('auth-overlay');
-  const title = document.getElementById('auth-title');
-  const desc = document.getElementById('auth-desc');
-  const input = document.getElementById('auth-password');
-  const btn = document.getElementById('auth-submit');
-  const error = document.getElementById('auth-error');
-  const attemptsEl = document.getElementById('auth-attempts');
-  const resetArea = document.getElementById('auth-reset-area');
-
-  title.textContent = '🔄 重置密码';
-  desc.textContent = '输入新密码（数据不受影响）';
-  btn.textContent = '🔒 确认重置';
-  resetArea.style.display = 'none';
-  attemptsEl.textContent = '';
-  error.style.display = 'none';
-  input.value = '';
-  input.disabled = false;
-  btn.disabled = false;
-
   btn.onclick = async () => {
+    if (isLocked()) return;
     const pwd = input.value.trim();
-    if (!pwd) { showAuthError('请输入新密码'); return; }
-    if (pwd.length < 4) { showAuthError('密码至少4个字符'); return; }
-    await setPassword(pwd);
-    overlay.classList.add('hidden');
-    resolve(true);
+    if (!pwd) return;
+
+    const ok = await verifyPassword(pwd);
+    if (ok) {
+      clearAttempts();
+      overlay.classList.add('hidden');
+      if (window._authResolve) window._authResolve(true);
+      return;
+    }
+
+    recordAttempt();
+    input.value = '';
+    input.focus();
+    updateAttemptsDisplay();
+
+    if (isLocked()) {
+      input.disabled = true;
+      btn.disabled = true;
+      error.style.display = 'block';
+      error.textContent = '已锁定 ' + Math.ceil(lockRemaining()/60) + ' 分钟，请稍后再试';
+      setTimeout(() => { location.reload(); }, lockRemaining() * 1000);
+    } else {
+      error.style.display = 'block';
+      error.textContent = '密码错误，还剩 ' + remainingAttempts() + ' 次机会';
+    }
   };
+
   input.onkeydown = (e) => { if (e.key === 'Enter') btn.click(); };
+  resetBtn.onclick = () => {
+    removePassword();
+    setupSetPassword(title, desc, btn, input, error, resetArea, attemptsEl, overlay);
+    title.textContent = '🔄 重置密码';
+    desc.textContent = '请输入新密码';
+    btn.textContent = '🔒 确认重置';
+    resetArea.style.display = 'none';
+  };
   input.focus();
 }
 
-function showAuthError(msg) {
-  const error = document.getElementById('auth-error');
-  error.textContent = msg;
-  error.style.display = 'block';
+function showError(msg) {
+  const err = document.getElementById('auth-error');
+  err.textContent = msg;
+  err.style.display = 'block';
 }
 
 function updateAttemptsDisplay() {
