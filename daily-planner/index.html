@@ -297,9 +297,12 @@ textarea.input{resize:vertical;min-height:80px}
 .day-timeline{position:relative;padding-left:60px}
 .day-hour{height:60px;border-bottom:1px solid var(--border-light);position:relative;display:flex;align-items:center}
 .day-hour-label{position:absolute;left:-56px;width:48px;text-align:right;font-size:0.75rem;color:var(--text-muted);top:-8px}
-.day-task-block{position:absolute;left:4px;right:4px;background:var(--primary-light);border-radius:var(--radius-sm);padding:4px 10px;font-size:0.78rem;color:#fff;overflow:hidden;cursor:pointer;transition:all var(--transition-fast);z-index:2}
-.day-task-block:hover{filter:brightness(1.1)}
+.day-task-block{position:absolute;left:6px;right:6px;background:var(--primary-light);border-radius:var(--radius-sm);padding:4px 10px;font-size:0.78rem;color:#fff;overflow:hidden;cursor:grab;transition:box-shadow var(--transition-fast);z-index:2;user-select:none;min-height:26px}
+.day-task-block:hover{filter:brightness(1.08);box-shadow:0 2px 8px rgba(0,0,0,0.15)}
+.day-task-block.dragging{cursor:grabbing;z-index:5;box-shadow:0 4px 16px rgba(0,0,0,0.25);opacity:0.9}
 .day-task-block.done{opacity:0.5}
+.day-task-block .resize-handle{position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;background:rgba(0,0,0,0.1);border-radius:0 0 var(--radius-sm) var(--radius-sm)}
+.day-task-block .resize-handle:hover{background:rgba(0,0,0,0.2)}
 
 /* 总结面板 */
 .summary-card{background:var(--card-gradient);border-radius:var(--radius-lg);padding:24px;border:1px solid var(--border);margin-bottom:16px}
@@ -615,18 +618,30 @@ const Store = {
   deletePlan(id) {
     const ps = this.get('plans')||[];
     const plan = ps.find(p=>p.id===id);
-    if(plan) {
-      // 移到回收站
-      const bin = this.get('recycle')||[];
-      bin.push({type:'plan', data:plan, deletedAt:now(), id:UUID()});
-      this.set('recycle', bin);
-      // 删除关联任务
-      const tasks = (this.get('tasks')||[]).filter(t=>t.planId!==id);
-      this.set('tasks', tasks);
-      // 从计划列表移除
-      this.set('plans', ps.filter(p=>p.id!==id));
-      EventBus.emit('data-changed', {type:'plan-deleted', id});
-    }
+    if(!plan) return;
+    const planCopy = JSON.parse(JSON.stringify(plan));
+    const tasks = (this.get('tasks')||[]).filter(function(t){return t.planId===id;});
+    const tasksCopy = JSON.parse(JSON.stringify(tasks));
+    this.set('plans', ps.filter(function(p){return p.id!==id;}));
+    this.set('tasks', (this.get('tasks')||[]).filter(function(t){return t.planId!==id;}));
+    EventBus.emit('data-changed', {type:'plan-deleted', id: id});
+    App.toast('已删除计划「'+plan.title+'」', 'info', {
+      undoLabel: '撤销', duration: 4000,
+      onUndo: function() {
+        var curPlans = Store.get('plans')||[];
+        curPlans.push(planCopy); Store.set('plans', curPlans);
+        var curTasks = Store.get('tasks')||[];
+        Store.set('tasks', curTasks.concat(tasksCopy));
+        EventBus.emit('data-changed', {type:'restore'});
+        App.toast('已恢复','success');
+      },
+      onTimeout: function() {
+        var bin = Store.get('recycle')||[];
+        bin.push({type:'plan', data:planCopy, deletedAt:now(), id:UUID()});
+        tasksCopy.forEach(function(t){ bin.push({type:'task', data:t, deletedAt:now(), id:UUID()}); });
+        Store.set('recycle', bin);
+      }
+    });
   },
 
   tasks(filter) {
@@ -654,14 +669,25 @@ const Store = {
   },
   deleteTask(id) {
     const ts = this.get('tasks')||[];
-    const task = ts.find(t=>t.id===id);
-    if(task) {
-      const bin = this.get('recycle')||[];
-      bin.push({type:'task', data:task, deletedAt:now(), id:UUID()});
-      this.set('recycle', bin);
-      this.set('tasks', ts.filter(t=>t.id!==id));
-      EventBus.emit('data-changed', {type:'task-deleted', id, planId:task.planId});
-    }
+    const task = ts.find(function(t){return t.id===id;});
+    if(!task) return;
+    const taskCopy = JSON.parse(JSON.stringify(task));
+    this.set('tasks', ts.filter(function(t){return t.id!==id;}));
+    EventBus.emit('data-changed', {type:'task-deleted', id: id, planId: task.planId});
+    App.toast('已删除任务「'+task.title+'」', 'info', {
+      undoLabel: '撤销', duration: 4000,
+      onUndo: function() {
+        var curTasks = Store.get('tasks')||[];
+        curTasks.push(taskCopy); Store.set('tasks', curTasks);
+        EventBus.emit('data-changed', {type:'restore'});
+        App.toast('已恢复','success');
+      },
+      onTimeout: function() {
+        var bin = Store.get('recycle')||[];
+        bin.push({type:'task', data:taskCopy, deletedAt:now(), id:UUID()});
+        Store.set('recycle', bin);
+      }
+    });
   },
   recycleBin() { return (this.get('recycle')||[]).sort((a,b)=>b.deletedAt>a.deletedAt?1:-1); },
   restoreFromBin(binId) {
@@ -1247,12 +1273,29 @@ const App = {
       </div>
       <div class="form-group"><label>截止日期</label><input type="date" class="input" id="form-plan-deadline" value="${plan?plan.deadline:today()}"></div>
       <div class="form-group"><label>标签</label><div class="tag-list" id="form-plan-tags">${tagChips}</div></div>
-      <div class="form-group"><label>重复规则</label><div class="select-wrap"><select class="input" id="form-plan-repeat">
+      <div class="form-group"><label>重复规则</label><div class="select-wrap"><select class="input" id="form-plan-repeat" onchange="App.toggleRepeatOptions()">
         <option value="">不重复</option>
         <option value="daily" ${plan&&plan.repeat&&plan.repeat.type==='daily'?'selected':''}>每天</option>
         <option value="weekly" ${plan&&plan.repeat&&plan.repeat.type==='weekly'?'selected':''}>每周</option>
         <option value="monthly" ${plan&&plan.repeat&&plan.repeat.type==='monthly'?'selected':''}>每月</option>
+        <option value="interval" ${plan&&plan.repeat&&plan.repeat.type==='interval'?'selected':''}>自定义间隔</option>
       </select></div></div>
+      <div id="repeat-options" style="display:${plan&&plan.repeat?'block':'none'}">
+        <div class="form-row" id="repeat-interval-row" style="display:${plan&&plan.repeat&&plan.repeat.type==='interval'?'flex':'none'}">
+          <div class="form-group"><label>间隔天数</label><input type="number" class="input" id="form-repeat-interval" value="${plan&&plan.repeat?plan.repeat.interval||1:1}" min="1" max="365"></div>
+        </div>
+        <div class="form-group"><label>重复结束条件</label><div class="select-wrap"><select class="input" id="form-repeat-end" onchange="App.toggleRepeatEndOptions()">
+          <option value="forever" ${plan&&plan.repeat&&!plan.repeat.endDate&&!plan.repeat.endCount?'selected':''}>永久重复</option>
+          <option value="count" ${plan&&plan.repeat&&plan.repeat.endCount?'selected':''}>固定次数后结束</option>
+          <option value="date" ${plan&&plan.repeat&&plan.repeat.endDate?'selected':''}>指定日期结束</option>
+        </select></div></div>
+        <div class="form-row" id="repeat-end-count-row" style="display:${plan&&plan.repeat&&plan.repeat.endCount?'flex':'none'}">
+          <div class="form-group"><label>重复次数</label><input type="number" class="input" id="form-repeat-count" value="${plan&&plan.repeat?plan.repeat.endCount||10:10}" min="1" max="999"></div>
+        </div>
+        <div class="form-row" id="repeat-end-date-row" style="display:${plan&&plan.repeat&&plan.repeat.endDate?'flex':'none'}">
+          <div class="form-group"><label>结束日期</label><input type="date" class="input" id="form-repeat-end-date" value="${plan&&plan.repeat?plan.repeat.endDate||'':''}"></div>
+        </div>
+      </div>
       <div class="form-group"><label><input type="checkbox" id="form-plan-private" ${plan&&plan.isPrivate?'checked':''}> 隐私计划（在列表中隐藏标题）</label></div>
     `;
     const footer = `<button class="btn btn-secondary" onclick="Modal.close()">取消</button>
@@ -1266,6 +1309,17 @@ const App = {
     const plan = planId ? Store.planById(planId) : null;
     const tags = [...document.querySelectorAll('#form-plan-tags .tag-chip.selected')].map(el=>el.textContent);
     const repeatType = document.getElementById('form-plan-repeat').value;
+    const repeatEndType = document.getElementById('form-repeat-end') ? document.getElementById('form-repeat-end').value : 'forever';
+
+    let repeat = null;
+    if(repeatType) {
+      repeat = {
+        type: repeatType,
+        interval: repeatType === 'interval' ? (parseInt(document.getElementById('form-repeat-interval')?document.getElementById('form-repeat-interval').value:1)||1) : 1,
+        endDate: repeatEndType === 'date' ? (document.getElementById('form-repeat-end-date')?document.getElementById('form-repeat-end-date').value:null) : null,
+        endCount: repeatEndType === 'count' ? (parseInt(document.getElementById('form-repeat-count')?document.getElementById('form-repeat-count').value:10)||10) : null,
+      };
+    }
 
     const newPlan = {
       id: plan ? plan.id : UUID(),
@@ -1276,7 +1330,7 @@ const App = {
       tags,
       isPrivate: document.getElementById('form-plan-private').checked,
       status: plan ? plan.status : 'active',
-      repeat: repeatType ? {type:repeatType, interval:1, endDate:null, endCount:null} : null,
+      repeat,
       createdAt: plan ? plan.createdAt : now(),
       updatedAt: now(),
       completedAt: plan ? plan.completedAt : null,
@@ -1318,6 +1372,8 @@ const App = {
     if(!title) { App.toast('请输入任务标题','error'); return; }
     const task = taskId ? Store.taskById(taskId) : null;
     const minutesBefore = parseInt(document.getElementById('form-task-reminder').value)||0;
+    // 自动继承计划标签
+    const planTags = (Store.planById(planId)||{}).tags || [];
     const newTask = {
       id: task ? task.id : UUID(),
       planId,
@@ -1326,6 +1382,7 @@ const App = {
       duration: parseInt(document.getElementById('form-task-duration').value)||30,
       priority: document.getElementById('form-task-priority').value,
       status: task ? task.status : 'pending',
+      tags: task ? (task.tags || planTags) : planTags,
       reminders: minutesBefore > 0 ? [{minutesBefore}] : [],
       order: task ? task.order : Store.tasks({planId}).length,
       createdAt: task ? task.createdAt : now(),
@@ -1522,7 +1579,7 @@ const App = {
         if(!match) { errors.push(`第${i+1}行任务${ti+1}：「${def}」格式错误，应为"任务名 分钟数"`); return null; }
         return {
           id:UUID(), planId, title:match[1].trim(), duration:parseInt(match[2]),
-          startHour:'09:00', priority:'medium', status:'pending', reminders:[],
+          startHour:'09:00', priority:'medium', tags:[], status:'pending', reminders:[],
           order:ti, createdAt:now(), completedAt:null,
         };
       }).filter(Boolean);
@@ -1773,14 +1830,58 @@ const App = {
     App.refreshCurrentView();
   },
 
+
+  toggleRepeatOptions() {
+    const sel = document.getElementById('form-plan-repeat');
+    const opts = document.getElementById('repeat-options');
+    const intRow = document.getElementById('repeat-interval-row');
+    if(sel && opts) {
+      opts.style.display = sel.value ? 'block' : 'none';
+      if(intRow) intRow.style.display = sel.value === 'interval' ? 'flex' : 'none';
+    }
+  },
+  toggleRepeatEndOptions() {
+    const sel = document.getElementById('form-repeat-end');
+    const countRow = document.getElementById('repeat-end-count-row');
+    const dateRow = document.getElementById('repeat-end-date-row');
+    if(sel) {
+      if(countRow) countRow.style.display = sel.value === 'count' ? 'flex' : 'none';
+      if(dateRow) dateRow.style.display = sel.value === 'date' ? 'flex' : 'none';
+    }
+  },
+
   // ========== Toast ==========
-  toast(msg, type='info') {
+  toast(msg, type, opts) {
+    if(typeof type === 'object') { opts = type; type = 'info'; }
+    opts = opts || {}; type = type || 'info';
     const container = document.getElementById('toast-container');
     const el = document.createElement('div');
-    el.className = `toast ${type}`;
-    el.textContent = msg;
+    el.className = 'toast ' + type;
+    el.style.display = 'flex';
+    el.style.alignItems = 'center';
+    el.innerHTML = '<span style="flex:1">' + msg + '</span>';
+    if(opts.undoLabel && opts.onUndo) {
+      el.innerHTML += '<button class="btn btn-sm" style="background:rgba(255,255,255,0.3);color:inherit;margin-left:12px;font-weight:700;white-space:nowrap">' + opts.undoLabel + '</button>';
+      const btn = el.querySelector('button');
+      const undoCb = opts.onUndo;
+      const timeoutCb = opts.onTimeout;
+      const timer = setTimeout(function() {
+        el.style.opacity = '0'; el.style.transform = 'translateX(40px)';
+        setTimeout(function() { el.remove(); }, 300);
+        if(timeoutCb) timeoutCb();
+      }, opts.duration || 3000);
+      btn.addEventListener('click', function() {
+        clearTimeout(timer);
+        el.remove();
+        undoCb();
+      });
+    } else {
+      setTimeout(function() {
+        el.style.opacity = '0'; el.style.transform = 'translateX(40px)';
+        setTimeout(function() { el.remove(); }, 300);
+      }, opts.duration || 2500);
+    }
     container.appendChild(el);
-    setTimeout(() => { el.style.opacity='0'; el.style.transform='translateX(40px)'; setTimeout(()=>el.remove(),300); }, 2500);
   },
 
   // ========== 快速添加 ==========
@@ -1839,11 +1940,13 @@ const App = {
         planId = plans[0].id;
       }
     }
+    const planForTags = Store.planById(planId);
     const task = {
-      id:UUID(), planId,
-      title, startHour: document.getElementById('quick-time')?.value||timeNow(),
+      id:UUID(), planId, title,
+      startHour: document.getElementById('quick-time')?.value||timeNow(),
       duration: parseInt(document.getElementById('quick-duration')?.value)||30,
       priority: document.getElementById('quick-priority')?.value||'medium',
+      tags: planForTags ? (planForTags.tags || []) : [],
       status:'pending', reminders: Store.settings().defaultReminder>0?[{minutesBefore:Store.settings().defaultReminder}]:[],
       order: Store.tasks({planId}).length, createdAt:now(), completedAt:null
     };
@@ -1965,10 +2068,15 @@ App.renderDayView = function(date) {
           const top = taskM/60*60;
           const height = Math.max(30, (t.duration||30)/60*60);
           html += `<div class="day-task-block${t.status==='done'?' done':''}"
-            style="top:${top}px;height:${height}px;left:4px;right:4px"
-            onclick="FocusTimer.startForTask('${t.id}')"
-            title="${t.title} (${t.planTitle}) - 点击开启专注">
-            ${t.title} · ${t.duration}min
+            style="top:${top}px;height:${height}px"
+            data-task-id="${t.id}"
+            data-start-hour="${t.startHour}"
+            data-duration="${t.duration||30}"
+            onmousedown="DayViewDrag.onTaskMouseDown(event,'${t.id}')"
+            ondblclick="FocusTimer.startForTask('${t.id}')"
+            title="${t.title} (${t.planTitle})&#10;拖拽移动 | 拉底部调整时长 | 双击开启专注">
+            ${t.startHour||''} ${t.title} · ${t.duration||30}min
+            <div class="resize-handle" onmousedown="DayViewDrag.onResizeMouseDown(event,'${t.id}')"></div>
           </div>`;
         }
       });
@@ -2190,6 +2298,123 @@ App.generateWeeklySummary = function() {
   setTimeout(()=>{
     App.toast('📊 上周总结已生成，点击查看~', 'info');
   }, 2000);
+};
+
+// ============================================================
+// PART 18.5: 日视图拖拽系统
+// ============================================================
+const DayViewDrag = {
+  _dragging: null,
+  _snapMinutes: 15,
+
+  onTaskMouseDown(e, taskId) {
+    if(e.button !== 0) return;
+    if(e.target.classList.contains('resize-handle')) return;
+    e.preventDefault();
+    const block = document.querySelector('.day-task-block[data-task-id="'+taskId+'"]');
+    if(!block || block.classList.contains('done')) return;
+    const task = Store.taskById(taskId);
+    if(!task) return;
+
+    this._dragging = {
+      taskId, type: 'move',
+      startY: e.clientY,
+      origTop: parseInt(block.style.top),
+      origHeight: parseInt(block.style.height),
+      origStartHour: task.startHour,
+      origDuration: task.duration,
+      block,
+    };
+    block.classList.add('dragging');
+
+    const onMove = function(ev) {
+      if(!DayViewDrag._dragging || DayViewDrag._dragging.type !== 'move') return;
+      const dy = ev.clientY - DayViewDrag._dragging.startY;
+      const snapped = Math.round(dy / (60/60*DayViewDrag._snapMinutes)) * (60/60*DayViewDrag._snapMinutes);
+      let newTop = DayViewDrag._dragging.origTop + snapped;
+      newTop = Math.max(0, Math.min(23*60, newTop));
+      DayViewDrag._dragging.block.style.top = newTop + 'px';
+    };
+
+    const onUp = function() {
+      if(!DayViewDrag._dragging || DayViewDrag._dragging.type !== 'move') return;
+      const block = DayViewDrag._dragging.block;
+      block.classList.remove('dragging');
+      const currentTop = parseInt(block.style.top) || DayViewDrag._dragging.origTop;
+      const dy = currentTop - DayViewDrag._dragging.origTop;
+      const snapped = Math.round(dy / (60/60*DayViewDrag._snapMinutes)) * (60/60*DayViewDrag._snapMinutes);
+      if(Math.abs(snapped) >= DayViewDrag._snapMinutes/60*60) {
+        const totalMinutes = Math.round((DayViewDrag._dragging.origTop + snapped) / (60/60));
+        const h = Math.floor(totalMinutes / 60);
+        const m = totalMinutes % 60;
+        const newStartHour = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+        const task_ = Store.taskById(DayViewDrag._dragging.taskId);
+        if(task_) {
+          task_.startHour = newStartHour;
+          Store.saveTask(task_);
+          App.toast('任务移至 '+newStartHour,'info');
+        }
+      }
+      DayViewDrag._dragging = null;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      App.renderDayView();
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  },
+
+  onResizeMouseDown(e, taskId) {
+    e.preventDefault();
+    e.stopPropagation();
+    const block = document.querySelector('.day-task-block[data-task-id="'+taskId+'"]');
+    if(!block || block.classList.contains('done')) return;
+    const task = Store.taskById(taskId);
+    if(!task) return;
+
+    this._dragging = {
+      taskId, type: 'resize',
+      startY: e.clientY,
+      origHeight: parseInt(block.style.height),
+      origDuration: task.duration || 30,
+      block,
+    };
+    block.classList.add('dragging');
+
+    const onMove = function(ev) {
+      if(!DayViewDrag._dragging || DayViewDrag._dragging.type !== 'resize') return;
+      const dy = ev.clientY - DayViewDrag._dragging.startY;
+      const snapped = Math.round(dy / (60/60*DayViewDrag._snapMinutes)) * (60/60*DayViewDrag._snapMinutes);
+      let newHeight = Math.max(26, DayViewDrag._dragging.origHeight + snapped);
+      newHeight = Math.min(24*60, newHeight);
+      DayViewDrag._dragging.block.style.height = newHeight + 'px';
+    };
+
+    const onUp = function() {
+      if(!DayViewDrag._dragging || DayViewDrag._dragging.type !== 'resize') return;
+      const block = DayViewDrag._dragging.block;
+      block.classList.remove('dragging');
+      const newHeight = parseInt(block.style.height);
+      const newMinutes = Math.round(newHeight / (60/60) / DayViewDrag._snapMinutes) * DayViewDrag._snapMinutes;
+      const finalMinutes = Math.max(5, Math.min(480, newMinutes || DayViewDrag._dragging.origDuration));
+      if(finalMinutes !== DayViewDrag._dragging.origDuration) {
+        const task_ = Store.taskById(DayViewDrag._dragging.taskId);
+        if(task_) {
+          task_.duration = finalMinutes;
+          Store.saveTask(task_);
+          App.toast('任务时长调整为 '+finalMinutes+'分钟','info');
+        }
+      }
+      DayViewDrag._dragging = null;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      App.renderDayView();
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  },
 };
 
 // ============================================================
@@ -2483,17 +2708,17 @@ const Mascot = {
 
   // 话术库
   _quotes: {
-    greeting: ['今天也要元气满满哦~ ✨','欢迎回来！今天想做什么呢？','等你好久啦~ 快来规划今天吧！','嘿！来看看今天有什么计划吧~','主人好！今天也要加油哦 💪'],
-    new_plan: ['新计划！感觉又要忙起来了呢~','计划创建成功！我会帮你记住的！','又有新的目标啦，一起加油吧！','好期待看到这个计划完成的样子~','计划GET！冲鸭！🦆'],
-    new_task: ['任务已记录！一点点完成吧~','小任务也值得认真对待哦！','又记下一件事，离完成又近了一步！','任务已加入清单，慢慢来~'],
+    greeting: ['今天也要元气满满哦~ ✨','欢迎回来！今天想做什么呢？','等你好久啦~ 快来规划今天吧！','嘿！来看看今天有什么计划吧~','主人好！今天也要加油哦 💪','新的一天开始啦！准备好大干一场了吗？'],
+    new_plan: ['新计划！感觉又要忙起来了呢~','计划创建成功！我会帮你记住的！','又有新的目标啦，一起加油吧！','好期待看到这个计划完成的样子~','计划GET！冲鸭！🦆','新的旅程开始了！Fight~'],
+    new_task: ['任务已记录！一点点完成吧~','小任务也值得认真对待哦！','又记下一件事，离完成又近了一步！','任务已加入清单，慢慢来~','新任务get！一件一件来，不着急~'],
     task_done: ['任务完成！太棒了！🎉','又完成一项！主人真厉害~','好棒！离目标又近了一步！','任务完成！休息一下？','完美！我就知道你能行！✨'],
-    plan_done: ['计划全部完成！开个庆祝会吧~ 🎊','所有任务都完成啦！主人太厉害了！','完美收官！今天也要好好休息哦~','成就感满满！一起来庆祝吧！'],
-    focus_start: ['专注时间到！我会安静陪着你的~','进入专注模式！一起加油！','排除杂念，专心致志！','让我看看这次能专注多久~ 🤫'],
-    focus_end: ['专注结束！辛苦啦~ 休息一下吧','好厉害！又完成了一段专注时间！','时间到！奖励自己一下？','专注力MAX！感觉怎么样？☕'],
-    reminder: ['叮叮！有任务到时间啦~','别忘了还有任务等着你哦！','时间到！该行动啦~','提醒：你有个任务要开始了哟 ⏰'],
-    chat: ['嘿嘿，找我有什么事吗？','今天天气不错呢，适合做计划~','主人有什么需要帮助的吗？','我喜欢看到你完成任务的样子！','加油加油！我会一直陪着你的~','偶尔休息也很重要哦！','要不要来杯咖啡？☕','一直在看着你呢，别偷懒哦~ (开玩笑的)'],
-    summary: ['来看看上周的表现吧！','数据不会说谎哦~ 上周怎么样？','回顾一下过去，才能更好地面向未来！'],
-    idle: ['主人还在吗？','是不是去忙了？我会等着的~','ZZZ...啊！我没睡着！','发呆中...今天做什么好呢？'],
+    plan_done: ['计划全部完成！开个庆祝会吧~ 🎊','所有任务都完成啦！主人太厉害了！','完美收官！今天也要好好休息哦~','成就感满满！一起来庆祝吧！','太强了！又一个计划被征服了！💫'],
+    focus_start: ['专注时间到！我会安静陪着你的~','进入专注模式！一起加油！','排除杂念，专心致志！','让我看看这次能专注多久~ 🤫','专注模式ON！世界都安静了呢~'],
+    focus_end: ['专注结束！辛苦啦~ 休息一下吧','好厉害！又完成了一段专注时间！','时间到！奖励自己一下？','专注力MAX！感觉怎么样？☕','叮咚~时间到！起来活动活动吧！'],
+    reminder: ['叮叮！有任务到时间啦~','别忘了还有任务等着你哦！','时间到！该行动啦~','提醒：你有个任务要开始了哟 ⏰','闹钟响啦！快来看看是什么任务~'],
+    chat: ['嘿嘿，找我有什么事吗？','今天天气不错呢，适合做计划~','主人有什么需要帮助的吗？','我喜欢看到你完成任务的样子！','加油加油！我会一直陪着你的~','偶尔休息也很重要哦！','要不要来杯咖啡？☕','一直在看着你呢，别偷懒哦~'],
+    summary: ['来看看上周的表现吧！','数据不会说谎哦~ 上周怎么样？','回顾一下过去，才能更好地面向未来！','总结时间！看看上周的成果吧~','一周又过去了呢，来看看收获吧 📊'],
+    idle: ['主人还在吗？','是不是去忙了？我会等着的~','ZZZ...啊！我没睡着！','发呆中...今天做什么好呢？','(托腮) 好安静呀...','在想什么呢？跟我说说？'],
   },
 
   say(scene) {
@@ -2893,6 +3118,58 @@ if('serviceWorker' in navigator) {
   const swUrl = URL.createObjectURL(blob);
   navigator.serviceWorker.register(swUrl).catch(()=>{});
 }
+
+// ============================================================
+// PWA 安装引导
+// ============================================================
+(function() {
+  var deferredPrompt;
+  window.addEventListener('beforeinstallprompt', function(e) {
+    e.preventDefault();
+    deferredPrompt = e;
+    setTimeout(function() {
+      if(deferredPrompt && Store.settings()) {
+        App.toast('📲 点击安装应用到桌面', 'info', {
+          duration: 8000,
+          undoLabel: '安装',
+          onUndo: function() {
+            if(deferredPrompt) {
+              deferredPrompt.prompt();
+              deferredPrompt.userChoice.then(function(result) {
+                if(result.outcome === 'accepted') App.toast('安装成功！🎉','success');
+                deferredPrompt = null;
+              });
+            }
+          },
+        });
+      }
+    }, 5000);
+  });
+  window.addEventListener('appinstalled', function() {
+    App.toast('应用已安装到桌面！✨','success');
+  });
+})();
+
+// ============================================================
+// 计划过期自动检测提醒
+// ============================================================
+(function() {
+  var checkedToday = null;
+  setInterval(function() {
+    var todayStr = today();
+    if(checkedToday === todayStr) return;
+    checkedToday = todayStr;
+    var plans = Store.plans();
+    var overduePlans = plans.filter(function(p) {
+      return p.status === 'active' && p.deadline < todayStr;
+    });
+    if(overduePlans.length > 0) {
+      var names = overduePlans.slice(0,3).map(function(p){return p.title;}).join('、');
+      if(overduePlans.length > 3) names += '等'+overduePlans.length+'个';
+      App.toast('⚠ '+overduePlans.length+'个计划已过期：'+names+'，请及时处理','error', {duration: 8000});
+    }
+  }, 60000);
+})();
 
 // 存储初始化
 Store.initDefaults();
